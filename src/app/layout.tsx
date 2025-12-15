@@ -34,7 +34,7 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en" suppressHydrationWarning>
-      <body className="antialiased bg-background text-foreground h-screen supports-[height:100dvh]:h-[100dvh] overflow-hidden flex flex-col">
+      <body className="antialiased bg-background text-foreground fixed inset-0 w-full h-[100dvh] overflow-hidden overscroll-none flex flex-col">
         <ThemeProvider
           attribute="class"
           defaultTheme="system"
@@ -44,17 +44,15 @@ export default function RootLayout({
           <ThemeColorManager />
           <SidebarProvider className="h-full overflow-hidden">
             <AppSidebar />
-            <SidebarInset className="flex-1 overflow-y-auto overflow-x-hidden relative h-full bg-background text-foreground block">
-              <div className="flex flex-col min-h-full w-full">
-                <div className="p-4 sticky top-0 z-50 flex items-center gap-2 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
-                  <SidebarTrigger className="-ml-1" />
-                  <Separator orientation="vertical" className="h-4" />
-                  <ModeToggle />
-                </div>
+            <SidebarInset className="relative h-full overflow-hidden bg-background text-foreground block">
+              <header className="absolute top-0 left-0 right-0 z-40 h-14 px-4 flex items-center gap-2 bg-background/60 backdrop-blur-md border-b transition-colors supports-[backdrop-filter]:bg-background/60">
+                <SidebarTrigger className="-ml-1" />
+                <Separator orientation="vertical" className="h-4" />
+                <ModeToggle />
+              </header>
+              <main className="h-full w-full">
                 {children}
-                {/* Spacer to allow scrolling past the fixed player */}
-                <div className="h-32 pointer-events-none shrink-0 w-full" />
-              </div>
+              </main>
             </SidebarInset>
             <QueueSidebar />
           </SidebarProvider>
