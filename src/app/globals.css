@@ -189,7 +189,9 @@
     @apply border-border outline-ring/50;
   }
 
-  body {
+  html, body {
+    overscroll-behavior: none; /* Prevents "pull-to-refresh" style bounce/drag */
+    overflow-x: hidden; /* Strict horizontal lock */
     @apply bg-background text-foreground;
   }
 }
