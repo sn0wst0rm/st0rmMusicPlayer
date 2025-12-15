@@ -49,3 +49,9 @@ next-env.d.ts
 # sqlite
 *.db
 *.db-journal
+
+# generated
+src/generated
+
+# vscode
+*.code-workspace
