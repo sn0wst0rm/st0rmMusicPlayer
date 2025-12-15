@@ -1,0 +1,48 @@
+generator client {
+    provider = "prisma-client-js"
+    output   = "../src/generated/prisma"
+}
+
+datasource db {
+    provider = "sqlite"
+}
+
+model Artist {
+    id        String   @id @default(uuid())
+    name      String   @unique
+    createdAt DateTime @default(now())
+    updatedAt DateTime @updatedAt
+    albums    Album[]
+    tracks    Track[]
+}
+
+model Album {
+    id              String   @id @default(uuid())
+    title           String
+    artistId        String
+    artist          Artist   @relation(fields: [artistId], references: [id])
+    coverPath       String? // Original/Legacy
+    coverSmallPath  String? // ~96px
+    coverMediumPath String? // ~512px
+    coverLargePath  String? // Original/Full
+    createdAt       DateTime @default(now())
+    updatedAt       DateTime @updatedAt
+    tracks          Track[]
+
+    @@unique([title, artistId])
+}
+
+model Track {
+    id          String   @id @default(uuid())
+    title       String
+    artistId    String
+    artist      Artist   @relation(fields: [artistId], references: [id])
+    albumId     String
+    album       Album    @relation(fields: [albumId], references: [id])
+    filePath    String   @unique // Original m4a file
+    mp3Path     String? // Converted mp3 file
+    duration    Float?
+    trackNumber Int?
+    createdAt   DateTime @default(now())
+    updatedAt   DateTime @updatedAt
+}
