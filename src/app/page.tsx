@@ -5,9 +5,9 @@ import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 import { usePlayerStore, Track } from "@/lib/store"
 import { PlayCircle, PlusCircle, RefreshCw, Play, Clock } from "lucide-react"
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
-import { cn } from "@/lib/utils"
+import { Virtuoso, TableVirtuoso, TableVirtuosoHandle, VirtuosoHandle, VirtuosoGrid } from 'react-virtuoso'
 import { LetterSelector } from "@/components/ui/letter-selector"
+import { cn } from "@/lib/utils"
 
 interface Album {
   id: string
@@ -26,47 +26,6 @@ function formatDuration(seconds: number) {
   const m = Math.floor(seconds / 60)
   const s = Math.floor(seconds % 60)
   return `${m}:${s.toString().padStart(2, '0')}`
-}
-
-function SongRow({ track, onClick, isPlaying, id, ...props }: { track: Track, onClick: () => void, isPlaying: boolean, id?: string } & React.HTMLAttributes<HTMLTableRowElement>) {
-  return (
-    <TableRow
-      id={id}
-      className="group hover:bg-muted/50 cursor-pointer border-b border-border/50"
-      onClick={onClick}
-      {...props}
-    >
-      <TableCell className="w-[50px] p-0 pl-2">
-        <div className="relative w-10 h-10 flex items-center justify-center rounded-md overflow-hidden bg-secondary group/image">
-          <img
-            src={`/api/cover/${track.id}?size=small`}
-            alt={track.title}
-            className="w-full h-full object-cover"
-            onError={(e) => { e.currentTarget.style.display = 'none' }}
-          />
-          <div className="absolute inset-0 bg-black/40 opacity-0 group-hover/image:opacity-100 transition-opacity flex items-center justify-center">
-            <Play className="h-5 w-5 fill-white text-white" />
-          </div>
-          {isPlaying && (
-            <div className="absolute inset-0 bg-black/40 flex items-center justify-center">
-              <Play className="h-5 w-5 fill-primary text-primary" />
-            </div>
-          )}
-        </div>
-      </TableCell>
-      <TableCell className="font-medium">
-        <div className="flex flex-col">
-          <span className="line-clamp-1 text-sm">{track.title}</span>
-          <span className="text-xs text-muted-foreground md:hidden line-clamp-1">{track.artist?.name}</span>
-        </div>
-      </TableCell>
-      <TableCell className="hidden md:table-cell text-muted-foreground text-sm line-clamp-1 max-w-[200px]">{track.artist?.name}</TableCell>
-      <TableCell className="hidden md:table-cell text-muted-foreground text-sm line-clamp-1 max-w-[200px]">{track.album?.title}</TableCell>
-      <TableCell className="text-right text-muted-foreground text-sm font-variant-numeric tabular-nums pr-4">
-        {formatDuration(track.duration)}
-      </TableCell>
-    </TableRow>
-  )
 }
 
 function AlbumCard({ album, playAlbum }: { album: Album, playAlbum: (a: Album) => void }) {
@@ -101,9 +60,12 @@ export default function Home() {
   const [library, setLibrary] = React.useState<Artist[]>([])
   const [loading, setLoading] = React.useState(true)
   const [scanning, setScanning] = React.useState(false)
-  const [selectorTop, setSelectorTop] = React.useState(208)
   const [activeLetter, setActiveLetter] = React.useState('#')
   const { playTrack, searchQuery, currentView, currentTrack, isPlaying } = usePlayerStore()
+
+  // Refs for virtualization
+  const tableVirtuosoRef = React.useRef<TableVirtuosoHandle>(null)
+  const virtuosoRef = React.useRef<VirtuosoHandle>(null)
 
   const fetchLibrary = React.useCallback(async () => {
     try {
@@ -118,66 +80,61 @@ export default function Home() {
     }
   }, [])
 
+  const handleLetterClick = (letter: string) => {
+    setActiveLetter(letter)
+    if (currentView === 'songs' && tableVirtuosoRef.current) {
+      const index = allSongs.findIndex(s => s.title.toUpperCase().startsWith(letter))
+      if (index !== -1) {
+        tableVirtuosoRef.current.scrollToIndex({ index, align: 'start', behavior: 'smooth', offset: -24 })
+      }
+    } else if (currentView === 'artists' && virtuosoRef.current) {
+      const index = sortedArtists.findIndex(a => a.name.toUpperCase().startsWith(letter))
+      if (index !== -1) {
+        virtuosoRef.current.scrollToIndex({ index, align: 'start', behavior: 'smooth', offset: -24 })
+      }
+    }
+  }
+
+
+
+  const letterSelectorRef = React.useRef<HTMLDivElement>(null)
+
+  // Throttled scroll handler for active letter detection + bar resizing
+  const handleScroll = (e: React.UIEvent<HTMLElement>) => {
+    // 1. Resize Letter Selector
+    if (letterSelectorRef.current) {
+      const scrollTop = e.currentTarget.scrollTop
+      const top = Math.max(100, 150 - scrollTop)
+      letterSelectorRef.current.style.top = `${top}px`
+    }
+
+    // 2. Detect Active Letter (Artists only)
+    if (currentView === 'artists') {
+      // Probe point: Center X, 80px Y (safely inside the 56px+Header zone)
+      const x = window.innerWidth / 2
+      const y = 80
+      const el = document.elementFromPoint(x, y)
+      // Traverse up to find the header with data attribute
+      const header = el?.closest('[data-artist-letter]') as HTMLElement
+      if (header) {
+        const letter = header.getAttribute('data-artist-letter')
+        if (letter && letter !== activeLetter) {
+          setActiveLetter(letter)
+        }
+      }
+    }
+  }
+
+  // Effect to reset top position when view changes
+  React.useEffect(() => {
+    if (letterSelectorRef.current) {
+      letterSelectorRef.current.style.top = '150px'
+    }
+  }, [currentView])
+
   React.useEffect(() => {
     fetchLibrary()
   }, [fetchLibrary])
-
-  React.useEffect(() => {
-    // Find the scrollable container. 
-    // In our layout, SidebarInset usually renders a main element or a div with overflow-auto.
-    // Based on debugging, we look for 'main.overflow-auto' or just the closest scrollable parent.
-    // Since this component is inside the SidebarInset (children), we can try to find the scrolling parent.
-
-    const scrollContainer = document.querySelector('main.overflow-y-auto') || document.querySelector('.overflow-y-auto') || document.querySelector('main')
-
-    if (!scrollContainer) {
-      console.warn("Could not find scroll container")
-      return
-    }
-
-    const handleScroll = () => {
-      // 208 is top-52, 80 is roughly top-20
-      const currentScroll = scrollContainer.scrollTop
-      const newTop = Math.max(80, 208 - currentScroll)
-      setSelectorTop(newTop)
-
-      // Sync active letter
-      // Find all anchors
-      const anchors = Array.from(document.querySelectorAll('[id^="song-"], [id^="artist-"]')) as HTMLElement[]
-
-      // We want the last anchor that is above the "active line".
-      // The active line is where we consider the "current" content to start.
-      // Since we have a sticky header and some top padding, this is roughly 180px-200px down.
-      // Refined: Songs has 60px header. Artists has 60px + ~50px header.
-      const offset = currentView === 'artists' ? 120 : 80
-      const containerRect = scrollContainer.getBoundingClientRect()
-
-      let currentActive = '#'
-      for (const anchor of anchors) {
-        // Use getBoundingClientRect for reliability relative to viewport/container
-        const rect = anchor.getBoundingClientRect()
-        // Calculate distance from top of scroll container
-        // If anchor is inside container, rect.top - containerRect.top is the distance from the top visible edge
-        const relativeTop = rect.top - containerRect.top
-
-        // If relativeTop is <= offset, it means the element is at or above the "active line"
-        if (relativeTop <= offset) {
-          const letter = anchor.getAttribute('data-letter')
-          if (letter) currentActive = letter
-        } else {
-          // As soon as we find one BELOW the line, we stop. The previous one remains the winner.
-          break
-        }
-      }
-      setActiveLetter(currentActive)
-    }
-
-    // Initial check (in case page is already scrolled somehow or refreshed)
-    handleScroll()
-
-    scrollContainer.addEventListener('scroll', handleScroll, { passive: true })
-    return () => scrollContainer.removeEventListener('scroll', handleScroll)
-  }, [currentView]) // Added currentView to dependencies
 
   const triggerScan = async () => {
     setScanning(true)
@@ -199,302 +156,349 @@ export default function Home() {
     }
   }
 
+  // --- Data Preparation ---
+
   const allSongs = React.useMemo(() => {
     return library.flatMap(artist => artist.albums.flatMap(album => album.tracks.map(t => ({ ...t, artist: { name: artist.name }, album: { title: album.title } }))))
       .sort((a, b) => a.title.localeCompare(b.title))
   }, [library])
 
   const allAlbums = React.useMemo(() => {
-    // Flatten albums but keep artist info if needed? 
-    // Album object in library has title and tracks.
     return library.flatMap(artist => artist.albums)
   }, [library])
+
+  const sortedArtists = React.useMemo(() => {
+    return [...library].sort((a, b) => a.name.localeCompare(b.name))
+  }, [library])
+
+  // --- Letter Logic ---
+
+  // Generate Letter -> Index maps for efficient scrolling
+  const songsLetterMap = React.useMemo(() => {
+    const map = new Map<string, number>()
+    let lastLetter = ''
+    allSongs.forEach((song, index) => {
+      const char = song.title.charAt(0).toUpperCase()
+      if (char !== lastLetter) {
+        if (!map.has(char)) map.set(char, index)
+        lastLetter = char
+      }
+    })
+    return map
+  }, [allSongs])
+
+  const artistsLetterMap = React.useMemo(() => {
+    const map = new Map<string, number>()
+    sortedArtists.forEach((artist, index) => {
+      const char = artist.name.charAt(0).toUpperCase()
+      if (!map.has(char)) map.set(char, index)
+    })
+    return map
+  }, [sortedArtists])
+
+
+  // --- Render Helpers ---
 
   const searchResults = React.useMemo(() => {
     if (!searchQuery) return null
     const lower = searchQuery.toLowerCase()
-    // Filter songs
     const tracks = allSongs.filter(t =>
       t.title.toLowerCase().includes(lower) ||
       t.artist?.name?.toLowerCase().includes(lower) ||
       t.album?.title?.toLowerCase().includes(lower)
     )
     return { tracks }
-  }, [searchQuery, allSongs, currentView, library])
+  }, [searchQuery, allSongs])
 
-  const handleScrollToLetter = (letter: string) => {
-    // Optimization: if we have active letter logic, clicking should set it immediately
-    // setActiveLetter(letter) // Will be set by scroll but instant feedback is good if we didn't rely on scroll for everything.
-    // Actually, setting it manually might fight with the scroll listener if the scroll destination is slightly off. 
-    // Let's rely on scroll listener or set it temporarily.
-    // Better: let the scroll listener handle it to ensure truth.
+  // --- Main Render ---
 
-    if (letter === '#') {
-      const scrollContainer = document.querySelector('main.overflow-y-auto') || document.querySelector('.overflow-y-auto') || document.querySelector('main')
-      if (scrollContainer) scrollContainer.scrollTo({ top: 0, behavior: 'smooth' })
-      return
-    }
+  // --- Components ---
 
-    const alphabet = "#ABCDEFGHIJKLMNOPQRSTUVWXYZ".split("")
-    const startIndex = alphabet.indexOf(letter)
-
-    // Find first available letter starting from the clicked one
-    let targetLetter = letter
-    let foundElement: HTMLElement | null = null
-
-    for (let i = startIndex; i < alphabet.length; i++) {
-      const currentSearch = alphabet[i]
-
-      if (currentView === 'songs') {
-        // We need to find the ID. 
-        // In render, we only put IDs on the first song of a letter.
-        // So we can search for the element directly if we know the ID? No, we don't know the ID easily without lookup.
-        // Check allSongs for first match
-        const track = allSongs.find(t => t.title.toUpperCase().startsWith(currentSearch))
-        if (track) {
-          foundElement = document.getElementById(`song-${track.id}`)
-          if (foundElement) {
-            targetLetter = currentSearch
-            break
-          }
-        }
-      } else if (currentView === 'artists') {
-        const artist = library.find(a => a.name.toUpperCase().startsWith(currentSearch))
-        if (artist) {
-          foundElement = document.getElementById(`artist-${artist.id}`)
-          if (foundElement) {
-            targetLetter = currentSearch
-            break
-          }
-        }
-      }
-    }
-
-    if (foundElement) {
-      // Scroll to top with offset
-      // We need to find the scrolling container again to calculate position
-      const scrollContainer = document.querySelector('main.overflow-y-auto') || document.querySelector('.overflow-y-auto') || document.querySelector('main')
-      if (scrollContainer) {
-        // Calculate absolute top position in the scrollable area
-        // element.offsetTop works if the element is relatively positioned within the scrolled parent.
-        // But table rows might be tricky. Let's use getBoundingClientRect + current scrollTop.
-        const rect = foundElement.getBoundingClientRect()
-        // We need the container's rect too to be precise?
-        // Actually: currentScroll + rect.top (relative to viewport) - containerOffset (relative to viewport)
-        // Simpler: element.offsetTop is usually relative to the offsetParent (often the table or table body).
-        // Let's stick to the standard calculation:
-        // Desired ScrollTop = Current ScrollTop + Element Top Relative to Viewport - Desired Offset
-
-        // Offset: We want it to be below the sticky header.
-        // The sticky header stack is approx 60px (top bar) + 60px (section header) + padding etc.
-        // Safe bet ~ 160-180px.
-        // Refined: 
-        // Songs: Top nav 60px. First item wants to be at 70px. Offset 70.
-        // Artists: Top nav 60px + Sticky Header 50px. Item at 110px. Offset 110.
-        const offset = currentView === 'artists' ? 110 : 70
-
-        const currentScroll = scrollContainer.scrollTop
-        const elementTop = rect.top // This is viewport relative
-        // The container top is likely 0 or close to 0 in viewport usually, but let's be safe.
-        const containerRect = scrollContainer.getBoundingClientRect()
-
-        // Absolute position of element inside container's scrollable height:
-        // absTop = currentScroll + (elementTop - containerRect.top)
-        const absTop = currentScroll + (elementTop - containerRect.top)
-
-        scrollContainer.scrollTo({
-          top: absTop - offset,
-          behavior: 'smooth'
-        })
-      }
-    }
-  }
-
-  const renderContent = () => {
-    // 1. Search Mode
-    if (searchQuery && searchResults) {
-      if (searchResults.tracks.length === 0) {
-        return (
-          <div className="flex flex-col items-center justify-center h-64 text-muted-foreground">
-            <p>No matches found for "{searchQuery}"</p>
-          </div>
-        )
-      }
-      return (
-        <div className="space-y-6">
-          <div className="flex items-center justify-between">
-            <h2 className="text-2xl font-bold tracking-tight">Top Results</h2>
-          </div>
-          <div className="rounded-md border bg-card">
-            <Table>
-              <TableHeader>
-                <TableRow className="hover:bg-transparent">
-                  <TableHead className="w-[50px]"></TableHead>
-                  <TableHead>Title</TableHead>
-                  <TableHead className="hidden md:table-cell">Artist</TableHead>
-                  <TableHead className="hidden md:table-cell">Album</TableHead>
-                  <TableHead className="text-right pr-4"><Clock className="h-4 w-4 ml-auto" /></TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {searchResults.tracks.map(track => (
-                  <SongRow
-                    key={track.id}
-                    track={track}
-                    isPlaying={currentTrack?.id === track.id && isPlaying}
-                    onClick={() => playTrack(track, searchResults.tracks)}
-                  />
-                ))}
-              </TableBody>
-            </Table>
-          </div>
-        </div>
-      )
-    }
-
-    // 2. Songs View
-    if (currentView === 'songs') {
-      // Find index of first song for each letter to add ID
-      const firstIds = new Set<string>()
-      let lastLetter = ''
-      allSongs.forEach(song => {
-        const currentLetter = song.title.charAt(0).toUpperCase()
-        if (currentLetter !== lastLetter) {
-          firstIds.add(song.id)
-          lastLetter = currentLetter
-        }
-      })
-
-      return (
-        <div className="flex gap-4">
-          <div className="flex-1 space-y-6">
-            <div className="flex items-center justify-between">
-              <h2 className="text-2xl font-bold tracking-tight">All Songs</h2>
-              <span className="text-muted-foreground text-sm">{allSongs.length} songs</span>
-            </div>
-            <div className="rounded-md border bg-card">
-              <Table>
-                <TableHeader>
-                  <TableRow className="hover:bg-transparent">
-                    <TableHead className="w-[50px]"></TableHead>
-                    <TableHead>Title</TableHead>
-                    <TableHead className="hidden md:table-cell">Artist</TableHead>
-                    <TableHead className="hidden md:table-cell">Album</TableHead>
-                    <TableHead className="text-right pr-4"><Clock className="h-4 w-4 ml-auto" /></TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {allSongs.map(track => {
-                    const isFirst = firstIds.has(track.id)
-                    const letter = track.title.charAt(0).toUpperCase()
-                    return (
-                      <SongRow
-                        key={track.id}
-                        id={isFirst ? `song-${track.id}` : undefined}
-                        data-letter={isFirst ? letter : undefined}
-                        track={track}
-                        isPlaying={currentTrack?.id === track.id && isPlaying}
-                        onClick={() => playTrack(track, allSongs)}
-                      />
-                    )
-                  })}
-                </TableBody>
-              </Table>
-            </div>
-          </div>
-          <div
-            className="fixed right-2 bottom-24 w-[20px] z-50 transition-[top] duration-100 ease-out"
-            style={{ top: `${selectorTop}px` }}
-          >
-            <LetterSelector onLetterClick={handleScrollToLetter} activeLetter={activeLetter} />
-          </div>
-        </div>
-      )
-    }
-
-    // 3. Albums View
-    if (currentView === 'albums') {
-      return (
-        <div className="space-y-6">
-          <div className="flex items-center justify-between">
-            <h2 className="text-2xl font-bold tracking-tight">Albums</h2>
-            <span className="text-muted-foreground text-sm">{allAlbums.length} albums</span>
-          </div>
-          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-6">
-            {allAlbums.map(album => (
-              <AlbumCard key={album.id} album={album} playAlbum={playAlbum} />
-            ))}
-          </div>
-        </div>
-      )
-    }
-
-    // 4. Artists View
-    if (currentView === 'artists') {
-      // Ensure sorted alphabetically by name
-      const sortedLibrary = [...library].sort((a, b) => a.name.localeCompare(b.name))
-
-      return (
-        <div className="flex gap-4">
-          <div className="flex-1 space-y-8">
-            {sortedLibrary.map(artist => {
-              const letter = artist.name.charAt(0).toUpperCase()
-              return (
-                <div key={artist.id} id={`artist-${artist.id}`} data-letter={letter} className="space-y-4 -ml-8 px-8" style={{ contentVisibility: 'auto', containIntrinsicSize: '500px' }}>
-                  <h2 className="text-xl font-semibold text-primary/80 sticky top-[60px] z-20 py-2 -mx-8 px-8 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
-                    {artist.name}
-                  </h2>
-                  <div className="grid grid-cols-[repeat(auto-fill,minmax(180px,1fr))] gap-6 pr-12">
-                    {artist.albums.map(album => (
-                      <AlbumCard key={album.id} album={album} playAlbum={playAlbum} />
-                    ))}
-                  </div>
-                </div>
-              )
-            })}
-            {library.length === 0 && !loading && (
-              <div className="text-center py-20">
-                <p className="text-muted-foreground">Your library is empty.</p>
-              </div>
-            )}
-          </div>
-          <div
-            className="fixed right-2 bottom-24 w-[20px] z-50 transition-[top] duration-100 ease-out"
-            style={{ top: `${selectorTop}px` }}
-          >
-            <LetterSelector onLetterClick={handleScrollToLetter} activeLetter={activeLetter} />
-          </div>
-        </div>
-      )
-    }
-
-    return null
-  }
-
-  return (
-    <div className="p-8 space-y-8 min-h-full">
-      <div className="flex items-center justify-between">
+  // Common Header Content - Memoized
+  const HeaderContent = React.useMemo(() => {
+    const Header = () => (
+      <div className="flex items-center justify-between px-8 py-6 pb-2 pt-16"> {/* Matches h-14 (56px) + padding */}
         <div className="space-y-1">
           <h1 className="text-3xl font-bold tracking-tight">Library</h1>
           <p className="text-muted-foreground capitalize">{currentView}</p>
         </div>
         <div className="flex gap-2">
-          <Button variant="outline" onClick={triggerScan} disabled={scanning}>
-            <RefreshCw className={`mr-2 h-4 w-4 ${scanning ? 'animate-spin' : ''}`} />
-            {scanning ? 'Scanning...' : 'Scan Library'}
+          <Button variant="outline" onClick={triggerScan} disabled={scanning} size="sm" className="px-3 sm:px-4">
+            <RefreshCw className={cn("h-4 w-4", scanning ? 'animate-spin' : '', scanning ? 'mr-2' : 'sm:mr-2')} />
+            <span className={cn("hidden sm:inline", scanning && "inline")}>{scanning ? 'Scanning...' : 'Scan Library'}</span>
           </Button>
-          <Button>
-            <PlusCircle className="mr-2 h-4 w-4" />
-            Add Folder
+          <Button size="sm" className="px-3 sm:px-4">
+            <PlusCircle className="h-4 w-4 sm:mr-2" />
+            <span className="hidden sm:inline">Add Folder</span>
           </Button>
         </div>
       </div>
+    )
+    return Header
+  }, [currentView, scanning, triggerScan]) // Dependencies
 
-      {loading ? (
-        <div className="flex items-center justify-center h-64 text-muted-foreground">
+  const TableHeaderContent = React.useMemo(() => {
+    return () => (
+      <caption className="caption-top p-0 m-0 w-full block">
+        <HeaderContent />
+      </caption>
+    )
+  }, [HeaderContent])
+
+  const renderVirtualFooter = React.useCallback(() => <div className="h-32" />, [])
+
+  // Memoize components objects for Virtuoso to prevent remounts
+  // We use context to pass dynamic data/callbacks to avoid recreating components
+  const tableComponents = React.useMemo(() => ({
+    Table: (props: any) => <table {...props} className="w-full caption-bottom text-sm border-collapse mb-32" />,
+    TableRow: ({ item, context, ...props }: any) => (
+      <tr
+        {...props}
+        className="border-b transition-colors hover:bg-muted/50 cursor-pointer group hover:bg-muted/50"
+        onClick={() => context.playTrack(item, context.allSongs)}
+      />
+    ),
+  }), [])
+
+  const searchTableComponents = React.useMemo(() => ({
+    Table: (props: any) => <table {...props} className="w-full caption-bottom text-sm border-collapse mb-32" />,
+    TableRow: ({ item, context, ...props }: any) => (
+      <tr
+        {...props}
+        className="border-b transition-colors hover:bg-muted/50 cursor-pointer"
+        onClick={() => context.playTrack(item, context.tracks)}
+      />
+    ),
+  }), [])
+
+  const artistsComponents = React.useMemo(() => ({
+    Header: HeaderContent,
+    Footer: renderVirtualFooter
+  }), [HeaderContent, renderVirtualFooter])
+
+  const albumsComponents = React.useMemo(() => ({
+    Header: HeaderContent,
+    Item: (props: any) => <div {...props} className="p-1" />,
+    List: React.forwardRef((props, ref) => <div {...props} ref={ref as any} className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-6 px-8" />),
+    Footer: renderVirtualFooter
+  }), [HeaderContent, renderVirtualFooter])
+
+
+  if (loading) {
+    return (
+      <div className="flex flex-col h-full w-full pt-14">
+        <HeaderContent />
+        <div className="flex items-center justify-center flex-1 text-muted-foreground">
           Loading library...
         </div>
-      ) : renderContent()}
-    </div>
-  )
+      </div>
+    )
+  }
+
+  // 1. Search Mode
+  if (searchQuery && searchResults) {
+    return (
+      <div className="flex flex-col h-full w-full">
+        <div className="flex-1 pt-14 overflow-x-hidden">
+          <div className="flex items-center justify-between py-6 pb-2 px-8">
+            <h2 className="text-2xl font-bold tracking-tight">Top Results</h2>
+          </div>
+          <TableVirtuoso
+            style={{ height: '100%', overscrollBehavior: 'none' }}
+            data={searchResults.tracks}
+            context={{ playTrack, tracks: searchResults.tracks }}
+            fixedHeaderContent={() => (
+              <tr className="bg-background border-b z-20">
+                <th className="h-12 text-left align-middle font-medium text-muted-foreground w-[50px] bg-background pl-8 pr-4"></th>
+                <th className="h-12 px-4 text-left align-middle font-medium text-muted-foreground bg-background">Title</th>
+                <th className="h-12 px-4 text-left align-middle font-medium text-muted-foreground hidden md:table-cell bg-background">Artist</th>
+                <th className="h-12 px-4 text-left align-middle font-medium text-muted-foreground hidden md:table-cell bg-background">Album</th>
+                <th className="h-12 align-middle font-medium text-muted-foreground text-right pr-8 bg-background"><Clock className="h-4 w-4 ml-auto" /></th>
+              </tr>
+            )}
+            itemContent={(index, track) => (
+              <>
+                <td className="p-4 align-middle bg-background/50 w-[50px] pl-8 py-2">
+                  <div className="relative w-10 h-10 flex items-center justify-center rounded-md overflow-hidden bg-secondary group/image">
+                    <img
+                      src={`/api/cover/${track.id}?size=small`}
+                      alt={track.title}
+                      className="w-full h-full object-cover"
+                      onError={(e) => { e.currentTarget.style.display = 'none' }}
+                    />
+                    {isPlaying && currentTrack?.id === track.id && (
+                      <div className="absolute inset-0 bg-black/40 flex items-center justify-center">
+                        <Play className="h-5 w-5 fill-primary text-primary" />
+                      </div>
+                    )}
+                  </div>
+                </td>
+                <td className="p-4 align-middle font-medium py-2">
+                  <div className="flex flex-col">
+                    <span className="line-clamp-1 text-sm">{track.title}</span>
+                    <span className="text-xs text-muted-foreground md:hidden line-clamp-1">{track.artist?.name}</span>
+                  </div>
+                </td>
+                <td className="p-4 align-middle hidden md:table-cell text-muted-foreground text-sm line-clamp-1 max-w-[200px] py-2">{track.artist?.name}</td>
+                <td className="p-4 align-middle hidden md:table-cell text-muted-foreground text-sm line-clamp-1 max-w-[200px] py-2">{track.album?.title}</td>
+                <td className="p-4 align-middle text-right text-muted-foreground text-sm font-variant-numeric tabular-nums pr-8 py-2">
+                  {formatDuration(track.duration)}
+                </td>
+              </>
+            )}
+            components={searchTableComponents}
+          />
+        </div>
+      </div>
+    )
+  }
+
+  // 2. Songs View
+  if (currentView === 'songs') {
+    return (
+      <div className="flex flex-col h-full w-full">
+        <div className="flex flex-1 min-h-0 relative overflow-x-hidden">
+          <div className="flex-1 min-w-0 h-full">
+            <TableVirtuoso
+              ref={tableVirtuosoRef}
+              style={{ height: '100%', overscrollBehavior: 'none' }}
+              data={allSongs}
+              context={{ playTrack, allSongs }}
+              rangeChanged={({ startIndex }) => {
+                const song = allSongs[startIndex]
+                if (song) setActiveLetter(song.title.charAt(0).toUpperCase())
+              }}
+              fixedHeaderContent={() => (
+                <tr className="bg-background border-b z-20">
+                  <th className="h-12 text-left align-middle font-medium text-muted-foreground w-[50px] bg-background pl-8 pr-4"></th>
+                  <th className="h-12 px-4 text-left align-middle font-medium text-muted-foreground bg-background">Title</th>
+                  <th className="h-12 px-4 text-left align-middle font-medium text-muted-foreground hidden md:table-cell bg-background">Artist</th>
+                  <th className="h-12 px-4 text-left align-middle font-medium text-muted-foreground hidden md:table-cell bg-background">Album</th>
+                  <th className="h-12 align-middle font-medium text-muted-foreground text-right pr-8 bg-background"><Clock className="h-4 w-4 ml-auto" /></th>
+                </tr>
+              )}
+              itemContent={(index, track) => (
+                <>
+                  <td className="p-4 align-middle w-[50px] pl-8 py-2">
+                    <div className="relative w-10 h-10 flex items-center justify-center rounded-md overflow-hidden bg-secondary group/image">
+                      <img
+                        src={`/api/cover/${track.id}?size=small`}
+                        alt={track.title}
+                        className="w-full h-full object-cover"
+                        onError={(e) => { e.currentTarget.style.display = 'none' }}
+                      />
+                      <div className="absolute inset-0 bg-black/40 opacity-0 group-hover/image:opacity-100 transition-opacity flex items-center justify-center">
+                        <Play className="h-5 w-5 fill-white text-white" />
+                      </div>
+                      {isPlaying && currentTrack?.id === track.id && (
+                        <div className="absolute inset-0 bg-black/40 flex items-center justify-center">
+                          <Play className="h-5 w-5 fill-primary text-primary" />
+                        </div>
+                      )}
+                    </div>
+                  </td>
+                  <td className="p-4 align-middle font-medium py-2">
+                    <div className="flex flex-col">
+                      <span className="line-clamp-1 text-sm">{track.title}</span>
+                      <span className="text-xs text-muted-foreground md:hidden line-clamp-1">{track.artist?.name}</span>
+                    </div>
+                  </td>
+                  <td className="p-4 align-middle hidden md:table-cell text-muted-foreground text-sm line-clamp-1 max-w-[200px] py-2">{track.artist?.name}</td>
+                  <td className="p-4 align-middle hidden md:table-cell text-muted-foreground text-sm line-clamp-1 max-w-[200px] py-2">{track.album?.title}</td>
+                  <td className="p-4 align-middle text-right text-muted-foreground text-sm font-variant-numeric tabular-nums pr-8 py-2">
+                    {formatDuration(track.duration)}
+                  </td>
+                </>
+              )}
+              components={{
+                ...tableComponents,
+                // Wrap HeaderContent for Table
+                Table: (props: any) => (
+                  <table {...props} className="w-full caption-bottom text-sm border-collapse mb-32">
+                    <TableHeaderContent />
+                    {props.children}
+                  </table>
+                )
+              }}
+              onScroll={handleScroll}
+            />
+          </div>
+        </div>
+        <div
+          ref={letterSelectorRef}
+          className="absolute right-2 z-50 pointer-events-none"
+          style={{ top: '150px', bottom: '90px' }}
+        >
+          <div className="pointer-events-auto h-full">
+            <LetterSelector onLetterClick={handleLetterClick} activeLetter={activeLetter} />
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  // 3. Artists View
+  if (currentView === 'artists') {
+    return (
+      <div className="flex flex-col h-full w-full">
+        <div className="flex flex-1 min-h-0 relative overflow-x-hidden">
+          <div className="flex-1 min-w-0 h-full">
+            <Virtuoso
+              ref={virtuosoRef}
+              style={{ height: '100%', overscrollBehavior: 'none' }}
+              data={sortedArtists}
+              rangeChanged={({ startIndex }) => {
+                // Determine active letter via scroll inspection now
+              }}
+              itemContent={(index, artist) => (
+                <div className="mb-8">
+                  <h2
+                    className="text-xl font-semibold text-primary/80 sticky top-[56px] z-30 py-2 px-8 bg-background/60 backdrop-blur-md"
+                    data-artist-letter={artist.name.charAt(0).toUpperCase()}
+                  >
+                    {artist.name}
+                  </h2>
+                  <div className="grid grid-cols-[repeat(auto-fill,minmax(180px,1fr))] gap-6 mt-4 px-8">
+                    {artist.albums.map(album => (
+                      <AlbumCard key={album.id} album={album} playAlbum={playAlbum} />
+                    ))}
+                  </div>
+                </div>
+              )}
+              components={artistsComponents}
+              onScroll={handleScroll}
+            />
+          </div>
+        </div>
+        <div
+          ref={letterSelectorRef}
+          className="absolute right-3 z-50 pointer-events-none"
+          style={{ top: '150px', bottom: '90px' }}
+        >
+          <div className="pointer-events-auto h-full">
+            <LetterSelector onLetterClick={handleLetterClick} activeLetter={activeLetter} />
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  // 4. Albums View
+  if (currentView === 'albums') {
+    return (
+      <div className="flex flex-col h-full w-full">
+        <div className="flex-1 min-h-0 overflow-x-hidden">
+          <VirtuosoGrid
+            style={{ height: '100%', overscrollBehavior: 'none' }}
+            data={allAlbums}
+            components={albumsComponents}
+            itemContent={(index, album) => (
+              <AlbumCard key={album.id} album={album} playAlbum={playAlbum} />
+            )}
+          />
+        </div>
+      </div>
+    )
+  }
+
 }
