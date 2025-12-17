@@ -197,7 +197,7 @@ export default function Home() {
 
   const TableHeaderContent = React.useMemo(() => {
     return () => (
-      <div className="flex items-center justify-between px-8 py-6 pb-2 pt-16"> {/* Matches h-14 (56px) + padding */}
+      <div className="flex items-center justify-between px-8 py-6 pb-2 pt-2"> {/* Matches h-14 (56px) + padding */}
         <div className="space-y-1">
           <h1 className="text-3xl font-bold tracking-tight">Library</h1>
           <p className="text-muted-foreground capitalize">{currentView}</p>
