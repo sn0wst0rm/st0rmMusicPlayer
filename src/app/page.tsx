@@ -51,8 +51,36 @@ export default function Home() {
       .sort((a, b) => a.title.localeCompare(b.title))
   }, [library])
 
+  /*
   const allAlbums = React.useMemo(() => {
     return library.flatMap(artist => artist.albums)
+  }, [library])
+  */
+
+  const groupedAlbums = React.useMemo(() => {
+    const albums = library.flatMap(artist => artist.albums).sort((a, b) => a.title.localeCompare(b.title))
+    const groups: { letter: string; albums: Album[] }[] = []
+    const letterMap = new Map<string, Album[]>()
+
+    albums.forEach(album => {
+      let char = album.title.charAt(0).toUpperCase()
+      if (!/[A-Z]/.test(char)) char = '#'
+      if (!letterMap.has(char)) letterMap.set(char, [])
+      letterMap.get(char)!.push(album)
+    })
+
+    // Sort letters: # first, then A-Z
+    const sortedLetters = Array.from(letterMap.keys()).sort((a, b) => {
+      if (a === '#' && b !== '#') return -1
+      if (a !== '#' && b === '#') return 1
+      return a.localeCompare(b)
+    })
+
+    sortedLetters.forEach(letter => {
+      groups.push({ letter, albums: letterMap.get(letter)! })
+    })
+
+    return groups
   }, [library])
 
   const sortedArtists = React.useMemo(() => {
@@ -71,6 +99,11 @@ export default function Home() {
       if (index !== -1) {
         virtuosoRef.current.scrollToIndex({ index, align: 'start', behavior: 'smooth', offset: -24 })
       }
+    } else if (currentView === 'albums' && virtuosoRef.current) {
+      const index = groupedAlbums.findIndex(g => g.letter === letter)
+      if (index !== -1) {
+        virtuosoRef.current.scrollToIndex({ index, align: 'start', behavior: 'smooth', offset: -24 })
+      }
     }
   }
 
@@ -84,15 +117,15 @@ export default function Home() {
     }
 
     // 2. Detect Active Letter (Artists only)
-    if (currentView === 'artists') {
+    if (currentView === 'artists' || currentView === 'albums') {
       // Probe point: Center X, 80px Y (safely inside the 56px+Header zone)
       const x = window.innerWidth / 2
       const y = 80
       const el = document.elementFromPoint(x, y)
       // Traverse up to find the header with data attribute
-      const header = el?.closest('[data-artist-letter]') as HTMLElement
+      const header = el?.closest('[data-letter]') as HTMLElement
       if (header) {
-        const letter = header.getAttribute('data-artist-letter')
+        const letter = header.getAttribute('data-letter')
         if (letter && letter !== activeLetter) {
           setActiveLetter(letter)
         }
@@ -176,6 +209,13 @@ export default function Home() {
   // Custom Components for Virtuoso
   const tableComponents = React.useMemo(() => ({
     Header: TableHeaderContent,
+    TableRow: ({ item, context, ...props }: any) => (
+      <tr
+        {...props}
+        className="border-b transition-colors hover:bg-muted/50 cursor-pointer group hover:bg-muted/50"
+        onClick={() => context.playTrack(item, context.allSongs)}
+      />
+    ),
   }), [TableHeaderContent])
 
   const artistsComponents = React.useMemo(() => ({
@@ -184,6 +224,13 @@ export default function Home() {
   }), [HeaderContent])
 
   const albumsComponents = React.useMemo(() => ({
+    Header: HeaderContent,
+    Item: (props: any) => <div {...props} className="p-1" />,
+    List: React.forwardRef((props, ref) => <div {...props} ref={ref as any} className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-6 px-8" />),
+    Footer: () => <div className="h-32" />
+  }), [HeaderContent])
+
+  const groupedAlbumsComponents = React.useMemo(() => ({
     Header: HeaderContent,
     Footer: () => <div className="h-32" />
   }), [HeaderContent])
@@ -261,11 +308,24 @@ export default function Home() {
   // 4. Albums View
   if (currentView === 'albums') {
     return (
-      <AlbumsView
-        albums={allAlbums}
-        playAlbum={playAlbum}
-        albumsComponents={albumsComponents}
-      />
+      <>
+        <AlbumsView
+          groupedAlbums={groupedAlbums}
+          playAlbum={playAlbum}
+          albumsComponents={groupedAlbumsComponents}
+          onScroll={handleScroll}
+          virtuosoRef={virtuosoRef}
+        />
+        <div
+          ref={letterSelectorRef}
+          className="absolute right-3 z-50 pointer-events-none"
+          style={{ top: '150px', bottom: '90px' }}
+        >
+          <div className="pointer-events-auto h-full">
+            <LetterSelector onLetterClick={handleLetterClick} activeLetter={activeLetter} />
+          </div>
+        </div>
+      </>
     )
   }
 
