@@ -36,6 +36,7 @@ export function SongsView({
                         ref={tableVirtuosoRef}
                         className="no-scrollbar"
                         data={songs}
+                        context={{ playTrack, allSongs: songs }}
                         style={{ height: '100%', overscrollBehavior: 'none' }}
                         fixedHeaderContent={() => (
                             <tr className="bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 sticky top-[56px] z-20 shadow-sm transition-shadow duration-200">

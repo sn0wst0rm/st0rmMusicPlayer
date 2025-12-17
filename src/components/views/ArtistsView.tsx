@@ -24,7 +24,7 @@ export function ArtistsView({ artists, playAlbum, artistsComponents, onScroll, v
                             <div className="mb-8">
                                 <h2
                                     className="text-xl font-semibold text-primary/80 sticky top-[56px] z-30 py-2 px-8 bg-background/60 backdrop-blur-md"
-                                    data-artist-letter={artist.name.charAt(0).toUpperCase()}
+                                    data-letter={artist.name.charAt(0).toUpperCase()}
                                 >
                                     {artist.name}
                                 </h2>
