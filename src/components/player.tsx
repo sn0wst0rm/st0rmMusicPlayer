@@ -4,6 +4,7 @@ import * as React from "react"
 import { usePlayerStore, Track } from "@/lib/store"
 import { Slider } from "@/components/ui/slider"
 import { Button } from "@/components/ui/button"
+import { Skeleton } from "@/components/ui/skeleton"
 import { Play, Pause, SkipBack, SkipForward, Volume2, Volume1, VolumeX, Shuffle, ListVideo, Repeat, Repeat1 } from "lucide-react"
 import { cn } from "@/lib/utils"
 
@@ -28,6 +29,11 @@ export function Player() {
     const audioRef = React.useRef<HTMLAudioElement>(null)
     const [progress, setProgress] = React.useState(0)
     const [duration, setDuration] = React.useState(0)
+    const [isCoverLoaded, setIsCoverLoaded] = React.useState(false)
+
+    React.useEffect(() => {
+        setIsCoverLoaded(false)
+    }, [currentTrack])
 
     React.useEffect(() => {
         if (audioRef.current) {
@@ -134,15 +140,15 @@ export function Player() {
             {/* Track Info */}
             <div className="flex items-center gap-4 w-1/3 min-w-0">
                 <div className="h-12 w-12 bg-secondary rounded-md shadow-sm overflow-hidden flex-shrink-0 relative group">
+                    {!isCoverLoaded && <Skeleton className="absolute inset-0 w-full h-full bg-primary/10" />}
                     <img
                         src={currentTrack ? `/api/cover/${currentTrack.id}?size=small` : ""}
                         alt={currentTrack?.title || "Cover"}
-                        className="h-full w-full object-cover"
+                        className={cn("h-full w-full object-cover transition-opacity duration-300", !isCoverLoaded && "opacity-0")}
+                        onLoad={() => setIsCoverLoaded(true)}
                         onError={(e) => {
                             e.currentTarget.style.display = "none";
-                            // Show fallback if text sibling exists, but strictly hiding img reveals background color.
-                            // Better: we can toggle a state, but for simplicity let's rely on the parent div's background and maybe a fallback icon if we really want.
-                            // The parent has bg-secondary. I'll just let it hide.
+                            // setIsCoverLoaded(true); // Keep skeleton on error as requested
                         }}
                     />
                     {!currentTrack && (

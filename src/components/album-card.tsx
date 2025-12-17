@@ -1,17 +1,32 @@
+
+import * as React from "react"
 import { Album } from "@/types/music"
 import { Card } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
+import { Skeleton } from "@/components/ui/skeleton"
 import { PlayCircle } from "lucide-react"
+import { cn } from "@/lib/utils"
 
 export function AlbumCard({ album, playAlbum }: { album: Album, playAlbum: (a: Album) => void }) {
+    const [isLoading, setIsLoading] = React.useState(true)
+
     return (
         <Card className="group overflow-hidden border-none shadow-none bg-transparent hover:bg-card/40 transition-colors cursor-pointer" onClick={() => playAlbum(album)}>
             <div className="aspect-square bg-secondary rounded-md mb-3 relative overflow-hidden shadow-sm group-hover:shadow-md transition-all">
+                {isLoading && (
+                    <Skeleton className="absolute inset-0 w-full h-full bg-primary/10" />
+                )}
                 <img
                     src={album.tracks[0] ? `/api/cover/${album.tracks[0].id}?size=medium` : ""}
                     alt={album.title}
-                    className="absolute inset-0 w-full h-full object-cover transition-opacity duration-300"
-                    onError={(e) => { e.currentTarget.style.display = 'none' }}
+                    className={cn(
+                        "absolute inset-0 w-full h-full object-cover transition-opacity duration-300",
+                        isLoading ? "opacity-0" : "opacity-100"
+                    )}
+                    onLoad={() => setIsLoading(false)}
+                    onError={(e) => {
+                        e.currentTarget.style.display = 'none'
+                    }}
                 />
                 <div className="absolute inset-0 flex items-center justify-center bg-gradient-to-br from-gray-200 to-gray-300 dark:from-gray-800 dark:to-gray-900 text-muted-foreground font-medium text-2xl -z-10">
                     {album.title.charAt(0)}
