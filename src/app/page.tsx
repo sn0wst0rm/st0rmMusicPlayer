@@ -27,7 +27,7 @@ export default function Home() {
   const { playTrack, currentView, currentTrack, isPlaying } = usePlayerStore()
 
   // Refs for virtualization
-  const tableVirtuosoRef = React.useRef<TableVirtuosoHandle>(null)
+  const tableVirtuosoRef = React.useRef<VirtuosoHandle>(null)
   const virtuosoRef = React.useRef<VirtuosoHandle>(null)
   const letterSelectorRef = React.useRef<HTMLDivElement>(null)
 
@@ -107,12 +107,21 @@ export default function Home() {
     }
   }
 
+  // Configuration for Letter Selector positioning
+  const SCROLL_CONFIG: Record<string, { start: number; min: number }> = {
+    songs: { start: 185, min: 110 },
+    artists: { start: 150, min: 100 },
+    albums: { start: 150, min: 105 },
+    default: { start: 150, min: 105 }
+  }
+
   // Throttled scroll handler for active letter detection + bar resizing
   const handleScroll = (e: React.UIEvent<HTMLElement>) => {
     // 1. Resize Letter Selector
     if (letterSelectorRef.current) {
       const scrollTop = e.currentTarget.scrollTop
-      const top = Math.max(100, 150 - scrollTop)
+      const config = SCROLL_CONFIG[currentView] || SCROLL_CONFIG.default
+      const top = Math.max(config.min, config.start - scrollTop)
       letterSelectorRef.current.style.top = `${top}px`
     }
 
@@ -136,7 +145,8 @@ export default function Home() {
   // Effect to reset top position when view changes
   React.useEffect(() => {
     if (letterSelectorRef.current) {
-      letterSelectorRef.current.style.top = '150px'
+      const config = SCROLL_CONFIG[currentView] || SCROLL_CONFIG.default
+      letterSelectorRef.current.style.top = `${config.start}px`
     }
   }, [currentView])
 
@@ -255,6 +265,7 @@ export default function Home() {
 
   // 2. Songs View
   if (currentView === 'songs') {
+    const config = SCROLL_CONFIG.songs
     return (
       <>
         <SongsView
@@ -271,7 +282,7 @@ export default function Home() {
         <div
           ref={letterSelectorRef}
           className="absolute right-3 z-50 pointer-events-none"
-          style={{ top: '150px', bottom: '90px' }}
+          style={{ top: `${config.start}px`, bottom: '90px' }}
         >
           <div className="pointer-events-auto h-full">
             <LetterSelector onLetterClick={handleLetterClick} activeLetter={activeLetter} />
@@ -283,6 +294,7 @@ export default function Home() {
 
   // 3. Artists View
   if (currentView === 'artists') {
+    const config = SCROLL_CONFIG.artists
     return (
       <>
         <ArtistsView
@@ -295,7 +307,7 @@ export default function Home() {
         <div
           ref={letterSelectorRef}
           className="absolute right-3 z-50 pointer-events-none"
-          style={{ top: '150px', bottom: '90px' }}
+          style={{ top: `${config.start}px`, bottom: '90px' }}
         >
           <div className="pointer-events-auto h-full">
             <LetterSelector onLetterClick={handleLetterClick} activeLetter={activeLetter} />
@@ -307,6 +319,7 @@ export default function Home() {
 
   // 4. Albums View
   if (currentView === 'albums') {
+    const config = SCROLL_CONFIG.albums
     return (
       <>
         <AlbumsView
@@ -319,7 +332,7 @@ export default function Home() {
         <div
           ref={letterSelectorRef}
           className="absolute right-3 z-50 pointer-events-none"
-          style={{ top: '150px', bottom: '90px' }}
+          style={{ top: `${config.start}px`, bottom: '90px' }}
         >
           <div className="pointer-events-auto h-full">
             <LetterSelector onLetterClick={handleLetterClick} activeLetter={activeLetter} />
