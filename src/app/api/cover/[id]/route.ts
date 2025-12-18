@@ -37,7 +37,7 @@ export async function GET(
 
         // 2. Check if we have a valid cached path in DB
         let coverPath = await getCoverPath(albumId, size);
-        let fileExists = coverPath ? fs.existsSync(coverPath) : false;
+        const fileExists = coverPath ? fs.existsSync(coverPath) : false;
 
         // 3. If not found or file missing, generate
         if (!coverPath || !fileExists) {
