@@ -118,7 +118,7 @@ export function Player() {
     if (!currentTrack) {
         return (
             <div className="h-20 border-t bg-background/80 backdrop-blur-md flex items-center justify-center text-muted-foreground text-sm fixed bottom-0 left-0 right-0 z-50">
-                Select a song to play
+                Select a song or an album to play
             </div>
         )
     }
