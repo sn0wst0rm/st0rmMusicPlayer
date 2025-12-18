@@ -6,20 +6,21 @@ import { cn } from "@/lib/utils"
 import { Track } from "@/lib/store"
 
 interface SongsViewProps {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     songs: any[]
     currentTrack: Track | null
     isPlaying: boolean
     playTrack: (track: Track, queue: Track[]) => void
     onScroll: (e: React.UIEvent<HTMLElement>) => void
     tableVirtuosoRef: RefObject<VirtuosoHandle | null>
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     tableComponents: any
     TableHeaderContent: React.FC
     formatDuration: (seconds: number) => string
 }
 
-// Column configuration
-const COLUMNS = ['index', 'title', 'artist', 'album', 'duration'] as const
-type ColumnKey = typeof COLUMNS[number]
+// Column configuration - used for type only
+type ColumnKey = 'index' | 'title' | 'artist' | 'album' | 'duration'
 
 const DEFAULT_WIDTHS: Record<ColumnKey, number> = {
     index: 48,

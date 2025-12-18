@@ -1,13 +1,15 @@
 import { Album } from "@/types/music"
-import { Virtuoso } from 'react-virtuoso'
+import { Virtuoso, VirtuosoHandle } from 'react-virtuoso'
 import { AlbumCard } from "@/components/album-card"
+import * as React from "react"
 
 interface AlbumsViewProps {
     groupedAlbums: { letter: string, albums: Album[] }[]
     playAlbum: (album: Album) => void
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     albumsComponents: any
     onScroll: (e: React.UIEvent<HTMLElement>) => void
-    virtuosoRef: any
+    virtuosoRef: React.RefObject<VirtuosoHandle | null>
 }
 
 export function AlbumsView({ groupedAlbums, playAlbum, albumsComponents, onScroll, virtuosoRef }: AlbumsViewProps) {
@@ -27,6 +29,7 @@ export function AlbumsView({ groupedAlbums, playAlbum, albumsComponents, onScrol
                                     {group.letter}
                                 </h2>
                                 <div className="grid grid-cols-[repeat(auto-fill,minmax(180px,1fr))] gap-6 mt-4 px-8">
+                                    {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
                                     {group.albums.map((album: any) => (
                                         <AlbumCard key={album.id} album={album} playAlbum={playAlbum} artistName={album.artistName} />
                                     ))}

@@ -6,9 +6,10 @@ import { RefObject } from "react"
 interface ArtistsViewProps {
     artists: Artist[]
     playAlbum: (album: Album) => void
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     artistsComponents: any
     onScroll: (e: React.UIEvent<HTMLElement>) => void
-    virtuosoRef: RefObject<VirtuosoHandle>
+    virtuosoRef: RefObject<VirtuosoHandle | null>
 }
 
 export function ArtistsView({ artists, playAlbum, artistsComponents, onScroll, virtuosoRef }: ArtistsViewProps) {
