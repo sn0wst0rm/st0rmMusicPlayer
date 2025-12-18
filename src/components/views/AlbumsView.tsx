@@ -27,8 +27,8 @@ export function AlbumsView({ groupedAlbums, playAlbum, albumsComponents, onScrol
                                     {group.letter}
                                 </h2>
                                 <div className="grid grid-cols-[repeat(auto-fill,minmax(180px,1fr))] gap-6 mt-4 px-8">
-                                    {group.albums.map(album => (
-                                        <AlbumCard key={album.id} album={album} playAlbum={playAlbum} />
+                                    {group.albums.map((album: any) => (
+                                        <AlbumCard key={album.id} album={album} playAlbum={playAlbum} artistName={album.artistName} />
                                     ))}
                                 </div>
                             </div>

@@ -11,6 +11,7 @@ import { Album, Artist } from "@/types/music"
 import { SongsView } from "@/components/views/SongsView"
 import { ArtistsView } from "@/components/views/ArtistsView"
 import { AlbumsView } from "@/components/views/AlbumsView"
+import { SearchView } from "@/components/views/SearchView"
 
 function formatDuration(seconds: number) {
   if (!seconds) return "0:00"
@@ -20,11 +21,10 @@ function formatDuration(seconds: number) {
 }
 
 export default function Home() {
-  const [library, setLibrary] = React.useState<Artist[]>([])
   const [loading, setLoading] = React.useState(true)
   const [scanning, setScanning] = React.useState(false)
   const [activeLetter, setActiveLetter] = React.useState('#')
-  const { playTrack, currentView, currentTrack, isPlaying } = usePlayerStore()
+  const { playTrack, currentView, currentTrack, isPlaying, library, setLibrary } = usePlayerStore()
 
   // Refs for virtualization
   const tableVirtuosoRef = React.useRef<VirtuosoHandle>(null)
@@ -42,7 +42,7 @@ export default function Home() {
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [setLibrary])
 
   // --- Data Preparation ---
 
@@ -58,7 +58,9 @@ export default function Home() {
   */
 
   const groupedAlbums = React.useMemo(() => {
-    const albums = library.flatMap(artist => artist.albums).sort((a, b) => a.title.localeCompare(b.title))
+    const albums = library.flatMap(artist =>
+      artist.albums.map(album => ({ ...album, artistName: artist.name }))
+    ).sort((a, b) => a.title.localeCompare(b.title))
     const groups: { letter: string; albums: Album[] }[] = []
     const letterMap = new Map<string, Album[]>()
 
@@ -164,9 +166,14 @@ export default function Home() {
     }
   }, [fetchLibrary])
 
-  const playAlbum = (album: Album) => {
+  const playAlbum = (album: Album, artistName?: string) => {
     if (album.tracks.length > 0) {
-      playTrack(album.tracks[0], album.tracks)
+      const tracksWithMetadata = album.tracks.map(track => ({
+        ...track,
+        artist: { name: artistName || 'Unknown Artist' },
+        album: { title: album.title }
+      }))
+      playTrack(tracksWithMetadata[0], tracksWithMetadata)
     }
   }
 
@@ -253,16 +260,12 @@ export default function Home() {
     )
   }
 
-  // 1. All Music View (Reuse Songs Logic or Placeholder)
-  if (currentView === 'all') {
+  // 1. Search View
+  if (currentView === 'search') {
     return (
-      <div className="flex flex-col h-full items-center justify-center p-8 text-center">
-        <h2 className="text-2xl font-bold mb-4">All Music</h2>
-        <p className="text-muted-foreground mb-8">This view is currently a placeholder. Use "Songs" or "Artists" for now.</p>
-      </div>
+      <SearchView playTrack={playTrack} playAlbum={playAlbum} />
     )
   }
-
   // 2. Songs View
   if (currentView === 'songs') {
     const config = SCROLL_CONFIG.songs
