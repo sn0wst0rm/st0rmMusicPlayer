@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import { Artist } from '@/types/music'
 
 export interface Track {
     id: string
@@ -31,8 +32,9 @@ interface PlayerState {
     sidebarOpen: boolean
     queueOpen: boolean
     searchQuery: string
-    currentView: 'artists' | 'albums' | 'songs'
+    currentView: 'artists' | 'albums' | 'songs' | 'search'
     repeatMode: 'off' | 'all' | 'one'
+    library: Artist[]
 
     // Actions
     setIsPlaying: (isPlaying: boolean) => void
@@ -46,10 +48,11 @@ interface PlayerState {
     reorderQueue: (newQueue: QueueItem[]) => void
     toggleShuffle: () => void
     setSearchQuery: (query: string) => void
-    setCurrentView: (view: 'artists' | 'albums' | 'songs') => void
+    setCurrentView: (view: 'artists' | 'albums' | 'songs' | 'search') => void
     toggleRepeat: () => void
     setQueueOpen: (open: boolean) => void
     toggleQueue: () => void
+    setLibrary: (library: Artist[]) => void
 }
 
 export const usePlayerStore = create<PlayerState>((set, get) => ({
@@ -65,6 +68,7 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
     searchQuery: "",
     currentView: 'songs',
     repeatMode: 'off',
+    library: [],
 
     setIsPlaying: (isPlaying) => set({ isPlaying }),
     setVolume: (volume) => set({ volume }),
@@ -248,5 +252,6 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
         return { repeatMode: modes[nextIndex] }
     }),
     setQueueOpen: (open) => set({ queueOpen: open }),
-    toggleQueue: () => set((state) => ({ queueOpen: !state.queueOpen }))
+    toggleQueue: () => set((state) => ({ queueOpen: !state.queueOpen })),
+    setLibrary: (library) => set({ library })
 }))
