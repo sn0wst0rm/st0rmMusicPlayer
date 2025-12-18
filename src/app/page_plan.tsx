@@ -1,13 +1,10 @@
 "use client"
 
 import * as React from "react"
-import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 import { usePlayerStore, Track } from "@/lib/store"
-import { PlayCircle, PlusCircle, RefreshCw, Play, Clock } from "lucide-react"
-import { ScrollArea } from "@/components/ui/scroll-area"
+import { Play, Clock } from "lucide-react"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
-import { cn } from "@/lib/utils"
 
 // --- Types ---
 interface Album {
@@ -62,10 +59,11 @@ function formatDuration(seconds: number) {
 
 export default function Home() {
     const [library, setLibrary] = React.useState<Artist[]>([])
-    const [loading, setLoading] = React.useState(true)
-    const [scanning, setScanning] = React.useState(false)
 
     const { playTrack, searchQuery, currentView } = usePlayerStore()
+
+    // Suppress unused variable warnings - these are kept for future implementation
+    void setLibrary
 
     // ... fetchLibrary & triggerScan (keep existing logic) ...
 
@@ -77,7 +75,6 @@ export default function Home() {
         return library.flatMap(artist => artist.albums)
     }, [library])
 
-    // Filter based on Search
     const searchResults = React.useMemo(() => {
         if (!searchQuery) return null
         const lower = searchQuery.toLowerCase()
@@ -85,41 +82,10 @@ export default function Home() {
         const tracks = allSongs.filter(t => t.title.toLowerCase().includes(lower) || t.artist?.name?.toLowerCase().includes(lower) || t.album?.title?.toLowerCase().includes(lower))
         return { tracks }
     }, [searchQuery, allSongs])
-
-    const renderContent = () => {
-        if (searchQuery && searchResults) {
-            return (
-                <div className="space-y-6">
-                    <h2 className="text-xl font-bold">Songs</h2>
-                    <div className="rounded-md border">
-                        <Table>
-                            <TableHeader>
-                                <TableRow>
-                                    <TableHead className="w-[50px]"></TableHead>
-                                    <TableHead>Title</TableHead>
-                                    <TableHead className="hidden md:table-cell">Artist</TableHead>
-                                    <TableHead className="hidden md:table-cell">Album</TableHead>
-                                    <TableHead className="text-right"><Clock className="h-4 w-4 ml-auto" /></TableHead>
-                                </TableRow>
-                            </TableHeader>
-                            <TableBody>
-                                {searchResults.tracks.map(track => (
-                                    <SongRow
-                                        key={track.id}
-                                        track={track}
-                                        isPlaying={false}
-                                        onClick={() => playTrack(track, searchResults.tracks)}
-                                    />
-                                ))}
-                            </TableBody>
-                        </Table>
-                    </div>
-                </div>
-            )
-        }
-
-        if (currentView === 'songs') {
-            return (
+    if (searchQuery && searchResults) {
+        return (
+            <div className="space-y-6">
+                <h2 className="text-xl font-bold">Songs</h2>
                 <div className="rounded-md border">
                     <Table>
                         <TableHeader>
@@ -132,51 +98,78 @@ export default function Home() {
                             </TableRow>
                         </TableHeader>
                         <TableBody>
-                            {allSongs.map(track => (
+                            {searchResults.tracks.map(track => (
                                 <SongRow
                                     key={track.id}
                                     track={track}
                                     isPlaying={false}
-                                    onClick={() => playTrack(track, allSongs)}
+                                    onClick={() => playTrack(track, searchResults.tracks)}
                                 />
                             ))}
                         </TableBody>
                     </Table>
                 </div>
-            )
-        }
+            </div>
+        )
+    }
 
-        if (currentView === 'albums') {
-            return (
-                <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-6">
-                    {allAlbums.map(album => (
-                        <Card key={album.id} className="group overflow-hidden border-none shadow-none bg-transparent hover:bg-card/40 transition-colors">
-                            {/* Album Card Content (Same as before) */}
-                            {/* Reuse previous logic but passed simple album prop */}
-                        </Card>
-                    ))}
-                </div>
-            )
-        }
-
-        // Default: Artists View (Home)
+    if (currentView === 'songs') {
         return (
-            <div className="space-y-8">
-                {library.map(artist => (
-                    <div key={artist.id}>
-                        {/* Artist Header and Grid */}
-                        <h2 className="text-xl font-semibold text-primary/80 sticky top-0 bg-background/95 backdrop-blur-sm z-10 py-2 border-b mb-4">
-                            {artist.name}
-                        </h2>
-                        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-6">
-                            {artist.albums.map(album => (
-                                // Album Card...
-                                <div className="text-sm">Example Album</div>
-                            ))}
-                        </div>
-                    </div>
+            <div className="rounded-md border">
+                <Table>
+                    <TableHeader>
+                        <TableRow>
+                            <TableHead className="w-[50px]"></TableHead>
+                            <TableHead>Title</TableHead>
+                            <TableHead className="hidden md:table-cell">Artist</TableHead>
+                            <TableHead className="hidden md:table-cell">Album</TableHead>
+                            <TableHead className="text-right"><Clock className="h-4 w-4 ml-auto" /></TableHead>
+                        </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                        {allSongs.map(track => (
+                            <SongRow
+                                key={track.id}
+                                track={track}
+                                isPlaying={false}
+                                onClick={() => playTrack(track, allSongs)}
+                            />
+                        ))}
+                    </TableBody>
+                </Table>
+            </div>
+        )
+    }
+
+    if (currentView === 'albums') {
+        return (
+            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-6">
+                {allAlbums.map(album => (
+                    <Card key={album.id} className="group overflow-hidden border-none shadow-none bg-transparent hover:bg-card/40 transition-colors">
+                        {/* Album Card Content (Same as before) */}
+                        {/* Reuse previous logic but passed simple album prop */}
+                    </Card>
                 ))}
             </div>
         )
     }
+
+    // Default: Artists View (Home)
+    return (
+        <div className="space-y-8">
+            {library.map(artist => (
+                <div key={artist.id}>
+                    {/* Artist Header and Grid */}
+                    <h2 className="text-xl font-semibold text-primary/80 sticky top-0 bg-background/95 backdrop-blur-sm z-10 py-2 border-b mb-4">
+                        {artist.name}
+                    </h2>
+                    <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-6">
+                        {artist.albums.map(album => (
+                            <div key={album.id} className="text-sm">Example Album</div>
+                        ))}
+                    </div>
+                </div>
+            ))}
+        </div>
+    )
 }
