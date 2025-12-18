@@ -116,7 +116,7 @@ export function SearchView({ playTrack, playAlbum }: SearchViewProps) {
             <div className="px-8 pt-16 pb-32 space-y-8">
                 <div className="space-y-1">
                     <h1 className="text-3xl font-bold tracking-tight">Search</h1>
-                    <p className="text-muted-foreground">Results for "{searchQuery}"</p>
+                    <p className="text-muted-foreground">Results for &quot;{searchQuery}&quot;</p>
                 </div>
 
                 {searchResults.songs.length > 0 && (
