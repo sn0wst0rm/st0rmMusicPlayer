@@ -16,9 +16,9 @@ import { CSS } from '@dnd-kit/utilities'
 import { GripVertical, Trash2, Play, Plus } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
-import { Virtuoso, VirtuosoHandle } from 'react-virtuoso'
+import { Virtuoso } from 'react-virtuoso'
 
-function SortableQueueItem({ item, index, onRemove }: { item: QueueItem; index: number; onRemove: (id: string) => void }) {
+function SortableQueueItem({ item, onRemove }: { item: QueueItem; index: number; onRemove: (id: string) => void }) {
     const {
         attributes,
         listeners,

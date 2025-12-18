@@ -7,28 +7,21 @@ import {
     SidebarGroupContent,
     SidebarGroupLabel,
     SidebarHeader,
-    SidebarFooter,
     SidebarMenu,
     SidebarMenuButton,
     SidebarMenuItem,
-    SidebarProvider,
-    SidebarTrigger,
     SidebarInput,
     useSidebar,
 } from "@/components/ui/sidebar"
 import {
     Command,
-    CommandEmpty,
     CommandGroup,
-    CommandInput,
     CommandItem,
     CommandList,
-    CommandSeparator,
 } from "@/components/ui/command"
 import {
     Popover,
     PopoverContent,
-    PopoverTrigger, // Keep it if used elsewhere, but we removed its usage
     PopoverAnchor,
 } from "@/components/ui/popover"
 import * as React from "react"
@@ -40,7 +33,7 @@ import { usePlayerStore, Track } from "@/lib/store"
 import { Artist, Album } from "@/types/music"
 
 export function AppSidebar() {
-    const { searchQuery, setSearchQuery, currentView, setCurrentView, library, playTrack, setQueueOpen } = usePlayerStore()
+    const { searchQuery, setSearchQuery, currentView, setCurrentView, library, playTrack } = usePlayerStore()
     const { setOpen, open } = useSidebar()
     const searchInputRef = React.useRef<React.ElementRef<typeof SidebarInput>>(null)
     const containerRef = React.useRef<HTMLDivElement>(null)
@@ -94,7 +87,7 @@ export function AppSidebar() {
         setOpenPopover(false)
     }
 
-    const handleGoToArtist = (artist: Artist) => {
+    const handleGoToArtist = (_artist: Artist) => {
         // We need a way to filter the Artist View or just switch to it?
         // The current implementation of ArtistView just lists all.
         // For now, switch to Artists view.
@@ -103,7 +96,7 @@ export function AppSidebar() {
         setOpenPopover(false)
     }
 
-    const handleGoToAlbum = (album: Album) => {
+    const handleGoToAlbum = (_album: Album) => {
         setCurrentView('albums')
         setOpenPopover(false)
     }

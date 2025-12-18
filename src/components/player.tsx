@@ -1,11 +1,11 @@
 "use client"
 
 import * as React from "react"
-import { usePlayerStore, Track } from "@/lib/store"
+import { usePlayerStore } from "@/lib/store"
 import { Slider } from "@/components/ui/slider"
 import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
-import { Play, Pause, SkipBack, SkipForward, Volume2, Volume1, VolumeX, Shuffle, ListVideo, Repeat, Repeat1 } from "lucide-react"
+import { Play, Pause, SkipBack, SkipForward, Volume2, Shuffle, ListVideo, Repeat, Repeat1 } from "lucide-react"
 import { cn } from "@/lib/utils"
 
 export function Player() {
