@@ -1,5 +1,5 @@
 import { Virtuoso, VirtuosoHandle } from 'react-virtuoso'
-import { RefObject } from "react"
+import { RefObject, useState, useCallback, useEffect } from "react"
 import { Play, Clock } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
@@ -17,6 +17,26 @@ interface SongsViewProps {
     formatDuration: (seconds: number) => string
 }
 
+// Column configuration
+const COLUMNS = ['index', 'title', 'artist', 'album', 'duration'] as const
+type ColumnKey = typeof COLUMNS[number]
+
+const DEFAULT_WIDTHS: Record<ColumnKey, number> = {
+    index: 48,
+    title: 400,
+    artist: 250,
+    album: 300,
+    duration: 80
+}
+
+const MIN_WIDTHS: Record<ColumnKey, number> = {
+    index: 40,
+    title: 100,
+    artist: 80,
+    album: 80,
+    duration: 60
+}
+
 export function SongsView({
     songs,
     currentTrack,
@@ -28,6 +48,125 @@ export function SongsView({
     formatDuration
 }: SongsViewProps) {
     const items = ["HEADER", ...songs]
+
+    // Column widths state
+    const [columnWidths, setColumnWidths] = useState<Record<ColumnKey, number>>(DEFAULT_WIDTHS)
+
+    // Resize state
+    const [resizing, setResizing] = useState<{ column: ColumnKey; startX: number; startWidth: number } | null>(null)
+
+    // Track if initial sizing has been done
+    const [initialSizingDone, setInitialSizingDone] = useState(false)
+
+    // Container width state (for potential future use)
+    const [, setContainerWidth] = useState(0)
+
+    // Resize observer for container - also sets initial column widths
+    useEffect(() => {
+        // Find the scroller element
+        const scroller = document.querySelector('[data-virtuoso-scroller="true"]')
+        if (!scroller) return
+
+        const observer = new ResizeObserver(entries => {
+            const width = entries[0]?.contentRect.width
+            if (!width) return
+
+            setContainerWidth(width)
+
+            // Calculate initial column widths only once
+            if (!initialSizingDone) {
+                const availableWidth = width - 64 // Subtract px-8 padding (32px * 2)
+                const fixedColumnsWidth = DEFAULT_WIDTHS.index + DEFAULT_WIDTHS.duration // These stay fixed
+                const flexibleSpace = availableWidth - fixedColumnsWidth
+
+                // Distribute flexible space proportionally: Title gets 40%, Artist 30%, Album 30%
+                const titleWidth = Math.max(MIN_WIDTHS.title, Math.floor(flexibleSpace * 0.4))
+                const artistWidth = Math.max(MIN_WIDTHS.artist, Math.floor(flexibleSpace * 0.3))
+                const albumWidth = Math.max(MIN_WIDTHS.album, Math.floor(flexibleSpace * 0.3))
+
+                setColumnWidths({
+                    index: DEFAULT_WIDTHS.index,
+                    title: titleWidth,
+                    artist: artistWidth,
+                    album: albumWidth,
+                    duration: DEFAULT_WIDTHS.duration
+                })
+                setInitialSizingDone(true)
+            }
+        })
+
+        observer.observe(scroller)
+        return () => observer.disconnect()
+    }, [initialSizingDone])
+
+    // Generate grid template from widths
+    const getGridTemplate = useCallback((isMobile: boolean) => {
+        if (isMobile) {
+            return `${columnWidths.index}px 1fr ${columnWidths.duration}px`
+        }
+        // Simple fixed-width columns - no dynamic fill calculation
+        return `${columnWidths.index}px ${columnWidths.title}px ${columnWidths.artist}px ${columnWidths.album}px ${columnWidths.duration}px`
+    }, [columnWidths])
+
+    // Handle resize start
+    const handleResizeStart = useCallback((e: React.MouseEvent, column: ColumnKey) => {
+        e.preventDefault()
+        e.stopPropagation()
+        setResizing({
+            column,
+            startX: e.clientX,
+            startWidth: columnWidths[column]
+        })
+    }, [columnWidths])
+
+    // Handle resize move and end
+    useEffect(() => {
+        if (!resizing) return
+
+        const handleMouseMove = (e: MouseEvent) => {
+            const delta = e.clientX - resizing.startX
+            const newWidth = Math.max(MIN_WIDTHS[resizing.column], resizing.startWidth + delta)
+            setColumnWidths(prev => ({
+                ...prev,
+                [resizing.column]: newWidth
+            }))
+        }
+
+        const handleMouseUp = () => {
+            setResizing(null)
+        }
+
+        document.addEventListener('mousemove', handleMouseMove)
+        document.addEventListener('mouseup', handleMouseUp)
+
+        return () => {
+            document.removeEventListener('mousemove', handleMouseMove)
+            document.removeEventListener('mouseup', handleMouseUp)
+        }
+    }, [resizing])
+
+    // Column header cell with optional grabber
+    const HeaderCell = ({ column, children, isLast = false, className = "" }: {
+        column: ColumnKey
+        children: React.ReactNode
+        isLast?: boolean
+        className?: string
+    }) => (
+        <div className={cn(
+            "relative flex items-center h-full border-r border-border/50",
+            column === 'index' ? 'px-2' : 'px-4',
+            isLast && "border-r-0",
+            className
+        )}>
+            <div className="flex-1 truncate">{children}</div>
+            {!isLast && (
+                <div
+                    className="absolute -right-2 top-0 h-full w-4 cursor-col-resize hover:bg-transparent z-10"
+                    onMouseDown={(e) => handleResizeStart(e, column)}
+                />
+            )}
+        </div>
+    )
 
     return (
         <div className="flex flex-col h-full w-full">
@@ -46,68 +185,87 @@ export function SongsView({
                         itemContent={(index, item) => {
                             if (item === "HEADER") {
                                 return (
-                                    <div className="sticky top-0 z-20 w-full bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 border-b shadow-sm transition-shadow duration-200">
-                                        <div className="grid grid-cols-[3rem_1fr_6rem] md:grid-cols-[3rem_2fr_1.5fr_1.5fr_6rem] gap-4 px-8 py-3 text-sm font-medium text-muted-foreground w-full">
-                                            <div className="pl-2">#</div>
-                                            <div>Title</div>
-                                            <div className="hidden md:block">Artist</div>
-                                            <div className="hidden md:block">Album</div>
-                                            <div className="flex justify-end pr-2"><Clock className="h-4 w-4" /></div>
+                                    <div className={cn(
+                                        "sticky top-0 z-20 w-full bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 border-b shadow-sm transition-shadow duration-200",
+                                        resizing && "select-none"
+                                    )}>
+                                        <div
+                                            className="flex px-8 py-3 text-sm font-medium text-muted-foreground w-full"
+                                            style={{ display: 'grid', gridTemplateColumns: getGridTemplate(false) }}
+                                        >
+                                            <HeaderCell column="index">#</HeaderCell>
+                                            <HeaderCell column="title">Title</HeaderCell>
+                                            <HeaderCell column="artist" className="hidden md:flex">Artist</HeaderCell>
+                                            <HeaderCell column="album" className="hidden md:flex">Album</HeaderCell>
+                                            <HeaderCell column="duration" isLast className="justify-end pr-6">
+                                                <Clock className="h-4 w-4" />
+                                            </HeaderCell>
                                         </div>
                                     </div>
                                 )
                             }
 
                             const track = item
-                            const realIndex = index - 1 // Adjust index for display since 0 is header
+                            const realIndex = index - 1
 
                             return (
                                 <div className="px-8 w-full group">
                                     <div
                                         className={cn(
-                                            "grid grid-cols-[3rem_1fr_6rem] md:grid-cols-[3rem_2fr_1.5fr_1.5fr_6rem] gap-4 py-2 text-sm cursor-pointer items-center rounded-sm transition-colors hover:bg-muted/50",
+                                            "py-2 text-sm cursor-pointer items-center rounded-sm transition-colors hover:bg-muted/50",
                                             isPlaying && currentTrack?.id === track.id && "bg-muted/50"
                                         )}
-                                        // Use original songs array for playContext to ensure correct queue
+                                        style={{ display: 'grid', gridTemplateColumns: getGridTemplate(false) }}
                                         onClick={() => playTrack(track, songs)}
                                     >
-                                        <div className="pl-2 font-medium tabular-nums text-muted-foreground flex items-center justify-center w-8 h-8 relative">
-                                            <span className={cn(
-                                                "group-hover:opacity-0 transition-opacity absolute",
-                                                isPlaying && currentTrack?.id === track.id && "opacity-0"
-                                            )}>
-                                                {realIndex + 1}
-                                            </span>
-                                            <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
-                                                <Button
-                                                    size="icon"
-                                                    variant="ghost"
-                                                    className="h-8 w-8 hover:bg-transparent hover:text-primary p-0"
-                                                    onClick={(e) => {
-                                                        e.stopPropagation()
-                                                        playTrack(track, songs)
-                                                    }}
-                                                >
-                                                    <Play className={cn("h-4 w-4 fill-current", isPlaying && currentTrack?.id === track.id && "fill-primary text-primary")} />
-                                                </Button>
-                                            </div>
-                                            {isPlaying && currentTrack?.id === track.id && (
-                                                <div className="absolute inset-0 flex items-center justify-center z-10">
-                                                    <Play className="h-4 w-4 fill-primary text-primary" />
+                                        {/* Index column */}
+                                        <div className="px-2 font-medium tabular-nums text-muted-foreground flex items-center w-full relative border-r border-border/50 h-full">
+                                            <div className="h-8 flex items-center relative">
+                                                <span className={cn(
+                                                    "group-hover:opacity-0 transition-opacity",
+                                                    isPlaying && currentTrack?.id === track.id && "opacity-0"
+                                                )}>
+                                                    {realIndex + 1}
+                                                </span>
+                                                <div className="absolute inset-0 flex items-center opacity-0 group-hover:opacity-100 transition-opacity">
+                                                    <Button
+                                                        size="icon"
+                                                        variant="ghost"
+                                                        className="h-8 w-8 hover:bg-transparent hover:text-primary p-0 flex items-center justify-start"
+                                                        onClick={(e) => {
+                                                            e.stopPropagation()
+                                                            playTrack(track, songs)
+                                                        }}
+                                                    >
+                                                        <Play className={cn("h-4 w-4 fill-current", isPlaying && currentTrack?.id === track.id && "fill-primary text-primary")} />
+                                                    </Button>
                                                 </div>
-                                            )}
+                                                {isPlaying && currentTrack?.id === track.id && (
+                                                    <div className="absolute inset-0 flex items-center">
+                                                        <Play className="h-4 w-4 fill-primary text-primary" />
+                                                    </div>
+                                                )}
+                                            </div>
                                         </div>
 
-                                        <div className="flex flex-col min-w-0 pr-4">
+                                        {/* Title column */}
+                                        <div className="flex flex-col min-w-0 px-4 border-r border-border/50 h-full justify-center">
                                             <span className={cn("truncate font-medium", isPlaying && currentTrack?.id === track.id && "text-primary")}>{track.title}</span>
                                             <span className="text-xs text-muted-foreground md:hidden truncate">{track.artist?.name}</span>
                                         </div>
 
-                                        <div className="hidden md:block text-muted-foreground truncate min-w-0 pr-4">{track.artist?.name}</div>
+                                        {/* Artist column */}
+                                        <div className="hidden md:flex text-muted-foreground min-w-0 px-4 border-r border-border/50 h-full items-center">
+                                            <span className="truncate">{track.artist?.name}</span>
+                                        </div>
 
-                                        <div className="hidden md:block text-muted-foreground truncate min-w-0 pr-4">{track.album?.title}</div>
+                                        {/* Album column */}
+                                        <div className="hidden md:flex text-muted-foreground min-w-0 px-4 border-r border-border/50 h-full items-center">
+                                            <span className="truncate">{track.album?.title}</span>
+                                        </div>
 
-                                        <div className="text-right text-muted-foreground font-variant-numeric tabular-nums pr-2 select-none">
+                                        {/* Duration column */}
+                                        <div className="text-right text-muted-foreground font-variant-numeric tabular-nums pr-6 select-none h-full flex items-center justify-end">
                                             {formatDuration(track.duration)}
                                         </div>
                                     </div>
