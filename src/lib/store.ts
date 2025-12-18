@@ -161,8 +161,6 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
         }
         const [nextItem, ...rest] = state.queue
         const nextTrack = nextItem.track
-
-        const nextId = nextTrack.id // Track ID
         // Remove from originalQueue. We find the first occurrence of this TRACK ID? 
         // Or should strictly match uniqueId if meaningful?
         // originalQueue stores QueueItems. 

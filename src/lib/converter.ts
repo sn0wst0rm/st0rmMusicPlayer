@@ -33,7 +33,7 @@ export async function convertLibrary() {
     console.log('Library conversion complete.');
 }
 
-async function convertTrack(track: any) {
+async function convertTrack(track: { id: string; filePath: string; title: string }) {
     const inputPath = track.filePath;
     const ext = path.extname(inputPath);
     const basename = path.basename(inputPath, ext);
@@ -64,7 +64,7 @@ async function convertTrack(track: any) {
                 });
                 resolve();
             })
-            .on('error', (err) => {
+            .on('error', (err: Error) => {
                 console.error(`Error converting ${track.title}:`, err);
                 reject(err);
             })
