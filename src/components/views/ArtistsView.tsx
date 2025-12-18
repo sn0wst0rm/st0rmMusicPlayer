@@ -30,7 +30,7 @@ export function ArtistsView({ artists, playAlbum, artistsComponents, onScroll, v
                                 </h2>
                                 <div className="grid grid-cols-[repeat(auto-fill,minmax(180px,1fr))] gap-6 mt-4 px-8">
                                     {artist.albums.map(album => (
-                                        <AlbumCard key={album.id} album={album} playAlbum={playAlbum} />
+                                        <AlbumCard key={album.id} album={album} playAlbum={playAlbum} artistName={artist.name} />
                                     ))}
                                 </div>
                             </div>

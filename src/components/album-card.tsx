@@ -7,11 +7,11 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { PlayCircle } from "lucide-react"
 import { cn } from "@/lib/utils"
 
-export function AlbumCard({ album, playAlbum }: { album: Album, playAlbum: (a: Album) => void }) {
+export function AlbumCard({ album, playAlbum, artistName, className }: { album: Album, playAlbum: (a: Album, artistName?: string) => void, artistName?: string, className?: string }) {
     const [isLoading, setIsLoading] = React.useState(true)
 
     return (
-        <Card className="group overflow-hidden border-none shadow-none bg-transparent hover:bg-card/40 transition-colors cursor-pointer" onClick={() => playAlbum(album)}>
+        <Card className={cn("group overflow-hidden border-none shadow-none bg-transparent hover:bg-card/40 transition-colors cursor-pointer", className)} onClick={() => playAlbum(album, artistName)}>
             <div className="aspect-square bg-secondary rounded-md mb-3 relative overflow-hidden shadow-sm group-hover:shadow-md transition-all">
                 {isLoading && (
                     <Skeleton className="absolute inset-0 w-full h-full bg-primary/10" />
