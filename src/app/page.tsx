@@ -4,10 +4,10 @@ import * as React from "react"
 import { Button } from "@/components/ui/button"
 import { usePlayerStore } from "@/lib/store"
 import { PlusCircle, RefreshCw } from "lucide-react"
-import { TableVirtuosoHandle, VirtuosoHandle } from 'react-virtuoso'
+import { VirtuosoHandle } from 'react-virtuoso'
 import { LetterSelector } from "@/components/ui/letter-selector"
 import { cn } from "@/lib/utils"
-import { Album, Artist } from "@/types/music"
+import { Album } from "@/types/music"
 import { SongsView } from "@/components/views/SongsView"
 import { ArtistsView } from "@/components/views/ArtistsView"
 import { AlbumsView } from "@/components/views/AlbumsView"
@@ -18,6 +18,14 @@ function formatDuration(seconds: number) {
   const m = Math.floor(seconds / 60)
   const s = Math.floor(seconds % 60)
   return `${m}:${s.toString().padStart(2, '0')}`
+}
+
+// Configuration for Letter Selector positioning (at module level to avoid recreating)
+const SCROLL_CONFIG: Record<string, { start: number; min: number }> = {
+  songs: { start: 185, min: 110 },
+  artists: { start: 150, min: 100 },
+  albums: { start: 150, min: 105 },
+  default: { start: 150, min: 105 }
 }
 
 export default function Home() {
@@ -109,14 +117,6 @@ export default function Home() {
     }
   }
 
-  // Configuration for Letter Selector positioning
-  const SCROLL_CONFIG: Record<string, { start: number; min: number }> = {
-    songs: { start: 185, min: 110 },
-    artists: { start: 150, min: 100 },
-    albums: { start: 150, min: 105 },
-    default: { start: 150, min: 105 }
-  }
-
   // Throttled scroll handler for active letter detection + bar resizing
   const handleScroll = (e: React.UIEvent<HTMLElement>) => {
     // 1. Resize Letter Selector
@@ -203,7 +203,7 @@ export default function Home() {
   }, [currentView, scanning, triggerScan]) // Dependencies
 
   const TableHeaderContent = React.useMemo(() => {
-    return () => (
+    const HeaderComponent = () => (
       <div className="flex items-center justify-between px-8 py-6 pb-2 pt-2"> {/* Matches h-14 (56px) + padding */}
         <div className="space-y-1">
           <h1 className="text-3xl font-bold tracking-tight">Library</h1>
@@ -221,14 +221,16 @@ export default function Home() {
         </div>
       </div>
     )
+    HeaderComponent.displayName = 'TableHeaderContent'
+    return HeaderComponent
   }, [currentView, scanning, triggerScan])
 
   // Custom Components for Virtuoso
   const tableComponents = React.useMemo(() => ({
     Header: TableHeaderContent,
-    TableRow: ({ item, context, ...props }: any) => (
+    TableRow: ({ item, context, ...props }: { item: typeof allSongs[number]; context: { playTrack: typeof playTrack; allSongs: typeof allSongs };[key: string]: unknown }) => (
       <tr
-        {...props}
+        {...(props as React.HTMLAttributes<HTMLTableRowElement>)}
         className="border-b transition-colors hover:bg-muted/50 cursor-pointer group hover:bg-muted/50"
         onClick={() => context.playTrack(item, context.allSongs)}
       />
@@ -240,12 +242,7 @@ export default function Home() {
     Footer: () => <div className="h-32" />
   }), [HeaderContent])
 
-  const albumsComponents = React.useMemo(() => ({
-    Header: HeaderContent,
-    Item: (props: any) => <div {...props} className="p-1" />,
-    List: React.forwardRef((props, ref) => <div {...props} ref={ref as any} className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-6 px-8" />),
-    Footer: () => <div className="h-32" />
-  }), [HeaderContent])
+
 
   const groupedAlbumsComponents = React.useMemo(() => ({
     Header: HeaderContent,
