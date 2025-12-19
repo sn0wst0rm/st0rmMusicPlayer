@@ -1,9 +1,10 @@
 import { Virtuoso, VirtuosoHandle, ListRange } from 'react-virtuoso'
-import { RefObject, useState, useCallback, useEffect } from "react"
-import { Play, Clock } from "lucide-react"
+import { RefObject, useState, useCallback, useEffect, useRef, useLayoutEffect } from "react"
+import { Play, Clock, Pause, ListPlus, Plus } from "lucide-react"
 import { Button } from "@/components/ui/button"
+import { AudioWaveform } from "@/components/ui/audio-waveform"
 import { cn } from "@/lib/utils"
-import { Track } from "@/lib/store"
+import { Track, usePlayerStore } from "@/lib/store"
 
 interface SongsViewProps {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -12,6 +13,7 @@ interface SongsViewProps {
     isPlaying: boolean
     playTrack: (track: Track, queue: Track[]) => void
     onSelectAlbum?: (albumId: string) => void
+    onArtistClick?: (artistName: string) => void
     onScroll: (e: React.UIEvent<HTMLElement>) => void
     tableVirtuosoRef: RefObject<VirtuosoHandle | null>
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -29,7 +31,7 @@ const DEFAULT_WIDTHS: Record<ColumnKey, number> = {
     title: 400,
     artist: 250,
     album: 300,
-    duration: 80
+    duration: 110
 }
 
 const MIN_WIDTHS: Record<ColumnKey, number> = {
@@ -40,12 +42,105 @@ const MIN_WIDTHS: Record<ColumnKey, number> = {
     duration: 60
 }
 
+// Max widths to prevent overflow into letter selector area
+const MAX_WIDTHS: Record<ColumnKey, number> = {
+    index: 80,
+    title: 800,
+    artist: 500,
+    album: 500,
+    duration: 200
+}
+
+// Extracted component for the index/play/waveform cell
+function IndexCell({
+    track,
+    realIndex,
+    isPlaying,
+    currentTrack,
+    playTrack,
+    songs
+}: {
+    track: Track
+    realIndex: number
+    isPlaying: boolean
+    currentTrack: Track | null
+    playTrack: (track: Track, queue: Track[]) => void
+    songs: Track[]
+}) {
+    const { setIsPlaying } = usePlayerStore()
+    const isCurrentTrack = currentTrack?.id === track.id
+    const isCurrentlyPlaying = isPlaying && isCurrentTrack
+
+    if (isCurrentlyPlaying) {
+        // Currently playing: show waveform, pause on hover
+        return (
+            <div className="h-8 flex items-center relative">
+                <AudioWaveform className="group-hover:hidden" />
+                <Button
+                    size="icon"
+                    variant="ghost"
+                    className="h-8 w-8 hover:bg-transparent text-primary p-0 hidden group-hover:flex items-center justify-start"
+                    onClick={(e) => {
+                        e.stopPropagation()
+                        setIsPlaying(false)
+                    }}
+                >
+                    <Pause className="h-4 w-4 fill-current" />
+                </Button>
+            </div>
+        )
+    }
+
+    if (isCurrentTrack && !isPlaying) {
+        // Current track but paused: show pause icon, play on hover
+        return (
+            <div className="h-8 flex items-center relative">
+                <Pause className="h-4 w-4 fill-primary text-primary group-hover:hidden" />
+                <Button
+                    size="icon"
+                    variant="ghost"
+                    className="h-8 w-8 hover:bg-transparent text-primary p-0 hidden group-hover:flex items-center justify-start"
+                    onClick={(e) => {
+                        e.stopPropagation()
+                        setIsPlaying(true)
+                    }}
+                >
+                    <Play className="h-4 w-4 fill-current" />
+                </Button>
+            </div>
+        )
+    }
+
+    // Not current track: show number, filled play on hover
+    return (
+        <div className="h-8 flex items-center relative">
+            <span className="group-hover:opacity-0 transition-opacity">
+                {realIndex + 1}
+            </span>
+            <div className="absolute inset-0 flex items-center opacity-0 group-hover:opacity-100 transition-opacity">
+                <Button
+                    size="icon"
+                    variant="ghost"
+                    className="h-8 w-8 hover:bg-transparent text-primary p-0 flex items-center justify-start"
+                    onClick={(e) => {
+                        e.stopPropagation()
+                        playTrack(track, songs)
+                    }}
+                >
+                    <Play className="h-4 w-4 fill-primary" />
+                </Button>
+            </div>
+        </div>
+    )
+}
+
 export function SongsView({
     songs,
     currentTrack,
     isPlaying,
     playTrack,
     onSelectAlbum,
+    onArtistClick,
     onScroll,
     tableVirtuosoRef,
     TableHeaderContent,
@@ -60,49 +155,112 @@ export function SongsView({
     // Resize state
     const [resizing, setResizing] = useState<{ column: ColumnKey; startX: number; startWidth: number } | null>(null)
 
-    // Track if initial sizing has been done
+    // Track if initial sizing has been done - use ref to avoid stale closure in ResizeObserver
     const [initialSizingDone, setInitialSizingDone] = useState(false)
+    const initialSizingDoneRef = useRef(false)
 
     // Container width state (for potential future use)
     const [, setContainerWidth] = useState(0)
 
-    // Resize observer for container - also sets initial column widths
-    useEffect(() => {
-        // Find the scroller element
-        const scroller = document.querySelector('[data-virtuoso-scroller="true"]')
-        if (!scroller) return
+    // Calculate column widths from container width
+    const calculateWidths = useCallback((width: number) => {
+        const availableWidth = width - 64 // Subtract px-8 padding (32px * 2)
+        const fixedColumnsWidth = DEFAULT_WIDTHS.index + DEFAULT_WIDTHS.duration // These stay fixed
+        const flexibleSpace = availableWidth - fixedColumnsWidth
 
-        const observer = new ResizeObserver(entries => {
-            const width = entries[0]?.contentRect.width
-            if (!width) return
+        // Distribute flexible space proportionally: Title gets 40%, Artist 30%, Album 30%
+        const titleWidth = Math.max(MIN_WIDTHS.title, Math.floor(flexibleSpace * 0.4))
+        const artistWidth = Math.max(MIN_WIDTHS.artist, Math.floor(flexibleSpace * 0.3))
+        const albumWidth = Math.max(MIN_WIDTHS.album, Math.floor(flexibleSpace * 0.3))
 
-            setContainerWidth(width)
-
-            // Calculate initial column widths only once
-            if (!initialSizingDone) {
-                const availableWidth = width - 64 // Subtract px-8 padding (32px * 2)
-                const fixedColumnsWidth = DEFAULT_WIDTHS.index + DEFAULT_WIDTHS.duration // These stay fixed
-                const flexibleSpace = availableWidth - fixedColumnsWidth
-
-                // Distribute flexible space proportionally: Title gets 40%, Artist 30%, Album 30%
-                const titleWidth = Math.max(MIN_WIDTHS.title, Math.floor(flexibleSpace * 0.4))
-                const artistWidth = Math.max(MIN_WIDTHS.artist, Math.floor(flexibleSpace * 0.3))
-                const albumWidth = Math.max(MIN_WIDTHS.album, Math.floor(flexibleSpace * 0.3))
-
-                setColumnWidths({
-                    index: DEFAULT_WIDTHS.index,
-                    title: titleWidth,
-                    artist: artistWidth,
-                    album: albumWidth,
-                    duration: DEFAULT_WIDTHS.duration
-                })
-                setInitialSizingDone(true)
-            }
+        setColumnWidths({
+            index: DEFAULT_WIDTHS.index,
+            title: titleWidth,
+            artist: artistWidth,
+            album: albumWidth,
+            duration: DEFAULT_WIDTHS.duration
         })
+        initialSizingDoneRef.current = true
+        setInitialSizingDone(true)
+    }, [])
 
-        observer.observe(scroller)
-        return () => observer.disconnect()
-    }, [initialSizingDone])
+    // Initial measurement using useLayoutEffect for immediate sizing
+    // This runs synchronously after DOM mutations but before browser paint
+    useLayoutEffect(() => {
+        if (initialSizingDoneRef.current) return
+
+        // Try to measure immediately
+        const measureAndSize = () => {
+            const scroller = document.querySelector('[data-virtuoso-scroller="true"]')
+            if (scroller) {
+                const rect = scroller.getBoundingClientRect()
+                if (rect.width > 0) {
+                    setContainerWidth(rect.width)
+                    calculateWidths(rect.width)
+                    return true
+                }
+            }
+            return false
+        }
+
+        // Measure on mount
+        if (measureAndSize()) return
+
+        // Retry with increasing delays for Safari/iOS which may need more time
+        // This handles cases where Virtuoso hasn't rendered yet
+        let retryCount = 0
+        const maxRetries = 10
+        const baseDelay = 50
+
+        const retryMeasure = () => {
+            if (initialSizingDoneRef.current) return
+            if (measureAndSize()) return
+
+            retryCount++
+            if (retryCount < maxRetries) {
+                setTimeout(retryMeasure, baseDelay * retryCount)
+            }
+        }
+
+        const timeoutId = setTimeout(retryMeasure, baseDelay)
+        return () => clearTimeout(timeoutId)
+    }, [calculateWidths])
+
+    // Resize observer for container - handles window resizes after initial mount
+    useEffect(() => {
+        let observer: ResizeObserver | null = null
+        let retryTimeoutId: ReturnType<typeof setTimeout> | null = null
+
+        const setupObserver = () => {
+            const scroller = document.querySelector('[data-virtuoso-scroller="true"]')
+            if (!scroller) {
+                // Retry after a short delay if element not yet available
+                retryTimeoutId = setTimeout(setupObserver, 100)
+                return
+            }
+
+            observer = new ResizeObserver(entries => {
+                const width = entries[0]?.contentRect.width
+                if (!width) return
+
+                setContainerWidth(width)
+
+                // If initial sizing wasn't done yet (Safari fallback), do it now
+                if (!initialSizingDoneRef.current) {
+                    calculateWidths(width)
+                }
+            })
+
+            observer.observe(scroller)
+        }
+
+        setupObserver()
+
+        return () => {
+            if (retryTimeoutId) clearTimeout(retryTimeoutId)
+            observer?.disconnect()
+        }
+    }, [calculateWidths])
 
     // Generate grid template from widths
     const getGridTemplate = useCallback((isMobile: boolean) => {
@@ -130,7 +288,10 @@ export function SongsView({
 
         const handleMouseMove = (e: MouseEvent) => {
             const delta = e.clientX - resizing.startX
-            const newWidth = Math.max(MIN_WIDTHS[resizing.column], resizing.startWidth + delta)
+            const newWidth = Math.min(
+                MAX_WIDTHS[resizing.column],
+                Math.max(MIN_WIDTHS[resizing.column], resizing.startWidth + delta)
+            )
             setColumnWidths(prev => ({
                 ...prev,
                 [resizing.column]: newWidth
@@ -156,27 +317,30 @@ export function SongsView({
         children: React.ReactNode
         isLast?: boolean
         className?: string
-    }) => (
-        <div className={cn(
-            "relative flex items-center h-full border-r border-border/50",
-            column === 'index' ? 'px-2' : 'px-4',
-            isLast && "border-r-0",
-            className
-        )}>
-            <div className="flex-1 truncate">{children}</div>
-            {!isLast && (
-                <div
-                    className="absolute -right-2 top-0 h-full w-4 cursor-col-resize hover:bg-transparent z-10"
-                    onMouseDown={(e) => handleResizeStart(e, column)}
-                />
-            )}
-        </div>
-    )
+    }) => {
+        const isCentered = className.includes('justify-center')
+        return (
+            <div className={cn(
+                "relative flex items-center h-full border-r border-border/50",
+                column === 'index' ? 'px-2' : 'px-4',
+                isLast && "border-r-0",
+                className
+            )}>
+                <div className={cn(isCentered ? "w-full flex justify-center" : "flex-1 truncate")}>{children}</div>
+                {!isLast && (
+                    <div
+                        className="absolute -right-2 top-0 h-full w-4 cursor-col-resize hover:bg-transparent z-10"
+                        onMouseDown={(e) => handleResizeStart(e, column)}
+                    />
+                )}
+            </div>
+        )
+    }
 
     return (
-        <div className="flex flex-col h-full w-full">
-            <div className="flex-1 min-h-0 relative overflow-x-hidden pt-14">
-                <div className="flex-1 min-w-0 h-full">
+        <div className="flex flex-col h-full w-full overflow-hidden">
+            <div className="flex-1 min-h-0 relative overflow-hidden pt-14">
+                <div className="flex-1 min-w-0 h-full overflow-hidden">
                     <Virtuoso
                         ref={tableVirtuosoRef}
                         className="no-scrollbar"
@@ -195,14 +359,14 @@ export function SongsView({
                                         resizing && "select-none"
                                     )}>
                                         <div
-                                            className="flex px-8 py-3 text-sm font-medium text-muted-foreground w-full"
+                                            className="flex px-8 pr-6 py-3 text-sm font-medium text-muted-foreground w-full"
                                             style={{ display: 'grid', gridTemplateColumns: getGridTemplate(false) }}
                                         >
                                             <HeaderCell column="index">#</HeaderCell>
                                             <HeaderCell column="title">Title</HeaderCell>
                                             <HeaderCell column="artist" className="hidden md:flex">Artist</HeaderCell>
                                             <HeaderCell column="album" className="hidden md:flex">Album</HeaderCell>
-                                            <HeaderCell column="duration" isLast className="justify-end pr-6">
+                                            <HeaderCell column="duration" isLast className="justify-center">
                                                 <Clock className="h-4 w-4" />
                                             </HeaderCell>
                                         </div>
@@ -214,7 +378,7 @@ export function SongsView({
                             const realIndex = index - 1
 
                             return (
-                                <div className="px-8 w-full group">
+                                <div className="px-8 pr-6 w-full group">
                                     <div
                                         className={cn(
                                             "py-2 text-sm cursor-pointer items-center rounded-sm transition-colors hover:bg-muted/50",
@@ -225,32 +389,14 @@ export function SongsView({
                                     >
                                         {/* Index column */}
                                         <div className="px-2 font-medium tabular-nums text-muted-foreground flex items-center w-full relative border-r border-border/50 h-full">
-                                            <div className="h-8 flex items-center relative">
-                                                <span className={cn(
-                                                    "group-hover:opacity-0 transition-opacity",
-                                                    isPlaying && currentTrack?.id === track.id && "opacity-0"
-                                                )}>
-                                                    {realIndex + 1}
-                                                </span>
-                                                <div className="absolute inset-0 flex items-center opacity-0 group-hover:opacity-100 transition-opacity">
-                                                    <Button
-                                                        size="icon"
-                                                        variant="ghost"
-                                                        className="h-8 w-8 hover:bg-transparent hover:text-primary p-0 flex items-center justify-start"
-                                                        onClick={(e) => {
-                                                            e.stopPropagation()
-                                                            playTrack(track, songs)
-                                                        }}
-                                                    >
-                                                        <Play className={cn("h-4 w-4 fill-current", isPlaying && currentTrack?.id === track.id && "fill-primary text-primary")} />
-                                                    </Button>
-                                                </div>
-                                                {isPlaying && currentTrack?.id === track.id && (
-                                                    <div className="absolute inset-0 flex items-center">
-                                                        <Play className="h-4 w-4 fill-primary text-primary" />
-                                                    </div>
-                                                )}
-                                            </div>
+                                            <IndexCell
+                                                track={track}
+                                                realIndex={realIndex}
+                                                isPlaying={isPlaying}
+                                                currentTrack={currentTrack}
+                                                playTrack={playTrack}
+                                                songs={songs}
+                                            />
                                         </div>
 
                                         {/* Title column */}
@@ -261,7 +407,17 @@ export function SongsView({
 
                                         {/* Artist column */}
                                         <div className="hidden md:flex text-muted-foreground min-w-0 px-4 border-r border-border/50 h-full items-center">
-                                            <span className="truncate">{track.artist?.name}</span>
+                                            <span
+                                                className="truncate hover:underline hover:text-foreground cursor-pointer transition-colors"
+                                                onClick={(e) => {
+                                                    e.stopPropagation()
+                                                    if (onArtistClick && track.artist?.name) {
+                                                        onArtistClick(track.artist.name)
+                                                    }
+                                                }}
+                                            >
+                                                {track.artist?.name}
+                                            </span>
                                         </div>
 
                                         {/* Album column */}
@@ -279,9 +435,38 @@ export function SongsView({
                                             </span>
                                         </div>
 
-                                        {/* Duration column */}
-                                        <div className="text-right text-muted-foreground font-variant-numeric tabular-nums pr-6 select-none h-full flex items-center justify-end">
-                                            {formatDuration(track.duration)}
+                                        {/* Duration column with queue actions */}
+                                        <div className="text-muted-foreground select-none h-full flex items-center justify-end gap-1">
+                                            {/* Queue actions - show on hover */}
+                                            <div className="flex items-center opacity-0 group-hover:opacity-100 transition-opacity">
+                                                <Button
+                                                    variant="ghost"
+                                                    size="icon"
+                                                    className="h-7 w-7 text-muted-foreground hover:text-foreground"
+                                                    title="Play Next"
+                                                    onClick={(e) => {
+                                                        e.stopPropagation()
+                                                        usePlayerStore.getState().playNext(track)
+                                                    }}
+                                                >
+                                                    <ListPlus className="h-4 w-4" />
+                                                </Button>
+                                                <Button
+                                                    variant="ghost"
+                                                    size="icon"
+                                                    className="h-7 w-7 text-muted-foreground hover:text-foreground"
+                                                    title="Add to Queue"
+                                                    onClick={(e) => {
+                                                        e.stopPropagation()
+                                                        usePlayerStore.getState().addToQueue(track)
+                                                    }}
+                                                >
+                                                    <Plus className="h-4 w-4" />
+                                                </Button>
+                                            </div>
+                                            <span className="font-variant-numeric tabular-nums text-sm pr-2">
+                                                {formatDuration(track.duration)}
+                                            </span>
                                         </div>
                                     </div>
                                 </div>
