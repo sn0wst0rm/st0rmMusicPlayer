@@ -21,7 +21,7 @@ export function Player() {
         isShuffling,
         repeatMode,
         toggleRepeat,
-        history,
+        sessionHistory,
         setQueueOpen,
         queueOpen,
         library,
@@ -109,8 +109,8 @@ export function Player() {
     }
 
     const handlePrev = () => {
-        // If track played > 3s OR no history (single track/start of queue), rewind
-        if (audioRef.current && (audioRef.current.currentTime > 3 || history.length === 0)) {
+        // If track played > 3s OR no session history (single track/start of queue), rewind
+        if (audioRef.current && (audioRef.current.currentTime > 3 || sessionHistory.length === 0)) {
             audioRef.current.currentTime = 0
         } else {
             prevTrack()
