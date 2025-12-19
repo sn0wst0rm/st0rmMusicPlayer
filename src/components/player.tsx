@@ -23,7 +23,9 @@ export function Player() {
         toggleRepeat,
         history,
         setQueueOpen,
-        queueOpen
+        queueOpen,
+        library,
+        setSelectedAlbum
     } = usePlayerStore()
 
     const audioRef = React.useRef<HTMLAudioElement>(null)
@@ -160,7 +162,25 @@ export function Player() {
                 <div className="truncate">
                     <div className="font-medium truncate text-sm">{currentTrack.title}</div>
                     <div className="text-xs text-muted-foreground truncate">
-                        {currentTrack.artist?.name || "Unknown Artist"} — {currentTrack.album?.title || "Unknown Album"}
+                        {currentTrack.artist?.name || "Unknown Artist"} — <span
+                            className="hover:underline cursor-pointer hover:text-foreground transition-colors"
+                            onClick={() => {
+                                // Find the album from library
+                                if (!currentTrack.albumId) return
+                                for (const artist of library) {
+                                    const album = artist.albums.find(a => a.id === currentTrack.albumId)
+                                    if (album) {
+                                        setSelectedAlbum({
+                                            id: album.id,
+                                            title: album.title,
+                                            tracks: album.tracks,
+                                            artistName: artist.name
+                                        })
+                                        return
+                                    }
+                                }
+                            }}
+                        >{currentTrack.album?.title || "Unknown Album"}</span>
                     </div>
                 </div>
             </div>
