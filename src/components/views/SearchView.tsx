@@ -1,5 +1,6 @@
 import * as React from "react"
 import { usePlayerStore, Track } from "@/lib/store"
+import { searchLibrary, SongSearchResult, AlbumSearchResult, ArtistSearchResult } from "@/lib/search"
 import { Album, Artist } from "@/types/music"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Separator } from "@/components/ui/separator"
@@ -15,6 +16,7 @@ interface SearchAlbum extends Album {
 interface SearchViewProps {
     playTrack: (track: Track, queue: Track[]) => void
     playAlbum: (album: Album) => void
+    onSelectAlbum?: (album: Album, artistName?: string) => void
 }
 
 // Extracted component to allow proper hook usage
@@ -63,35 +65,22 @@ function SongRow({ song, allSongs, playTrack }: {
     )
 }
 
-export function SearchView({ playTrack, playAlbum }: SearchViewProps) {
+export function SearchView({ playTrack, playAlbum, onSelectAlbum }: SearchViewProps) {
     const { searchQuery, library, setCurrentView } = usePlayerStore()
 
+    // Use the advanced search engine with fuzzy matching and relevance scoring
     const searchResults = React.useMemo(() => {
         if (!searchQuery) return { songs: [], albums: [], artists: [] }
 
-        const query = searchQuery.toLowerCase()
+        const results = searchLibrary(searchQuery, library)
 
-        const songs: Track[] = []
-        const albums: SearchAlbum[] = []
-        const artists: Artist[] = []
-
-        library.forEach(artist => {
-            if (artist.name.toLowerCase().includes(query)) {
-                artists.push(artist)
-            }
-            artist.albums.forEach(album => {
-                if (album.title.toLowerCase().includes(query)) {
-                    albums.push({ ...album, artistName: artist.name })
-                }
-                album.tracks.forEach(track => {
-                    if (track.title.toLowerCase().includes(query)) {
-                        songs.push({ ...track, artist: { name: artist.name }, album: { title: album.title } })
-                    }
-                })
-            })
-        })
-
-        return { songs, albums, artists }
+        // Extract items from search results (they're wrapped with score metadata)
+        // Results are already sorted by relevance score
+        return {
+            songs: results.songs.map((r: SongSearchResult) => r.item),
+            albums: results.albums.map((r: AlbumSearchResult) => r.item),
+            artists: results.artists.map((r: ArtistSearchResult) => r.item)
+        }
     }, [searchQuery, library])
 
     if (!searchQuery) {
@@ -147,6 +136,7 @@ export function SearchView({ playTrack, playAlbum }: SearchViewProps) {
                                     album={album}
                                     artistName={album.artistName}
                                     playAlbum={playAlbum}
+                                    onSelect={onSelectAlbum}
                                     className="w-full"
                                 />
                             ))}

@@ -30,46 +30,32 @@ import { ListMusic, Mic2, Search as SearchIcon, Music, Import, Disc } from "luci
 import { Lightning } from "@/components/icons/lightning"
 import { MarqueeText } from "@/components/ui/marquee-text"
 import { usePlayerStore, Track } from "@/lib/store"
+import { searchLibraryLimited, SongSearchResult, AlbumSearchResult, ArtistSearchResult } from "@/lib/search"
 import { Artist, Album } from "@/types/music"
 
 export function AppSidebar() {
-    const { searchQuery, setSearchQuery, currentView, setCurrentView, library, playTrack } = usePlayerStore()
+    const { searchQuery, setSearchQuery, currentView, setCurrentView, library, playTrack, setSelectedAlbum } = usePlayerStore()
     const { setOpen, open } = useSidebar()
     const searchInputRef = React.useRef<React.ElementRef<typeof SidebarInput>>(null)
     const containerRef = React.useRef<HTMLDivElement>(null)
     const [openPopover, setOpenPopover] = React.useState(false)
     const [containerWidth, setContainerWidth] = React.useState(0)
 
-    // Filter results
+    // Use advanced search with fuzzy matching and relevance scoring
     const searchResults = React.useMemo(() => {
         if (!searchQuery || searchQuery.length < 2) return { songs: [], albums: [], artists: [] }
 
-        const query = searchQuery.toLowerCase()
-
-        const songs: Track[] = []
-        const albums: (Album & { artistName: string })[] = []
-        const artists: Artist[] = []
-
-        library.forEach(artist => {
-            if (artist.name.toLowerCase().includes(query)) {
-                artists.push(artist)
-            }
-            artist.albums.forEach(album => {
-                if (album.title.toLowerCase().includes(query)) {
-                    albums.push({ ...album, artistName: artist.name })
-                }
-                album.tracks.forEach(track => {
-                    if (track.title.toLowerCase().includes(query)) {
-                        songs.push({ ...track, artist: { name: artist.name }, album: { title: album.title } })
-                    }
-                })
-            })
+        const results = searchLibraryLimited(searchQuery, library, {
+            songs: 3,
+            albums: 3,
+            artists: 3
         })
 
+        // Extract items from search results (they're wrapped with score metadata)
         return {
-            songs: songs.slice(0, 3),
-            albums: albums.slice(0, 3),
-            artists: artists.slice(0, 3)
+            songs: results.songs.map((r: SongSearchResult) => r.item),
+            albums: results.albums.map((r: AlbumSearchResult) => r.item),
+            artists: results.artists.map((r: ArtistSearchResult) => r.item)
         }
     }, [searchQuery, library])
 
@@ -96,8 +82,13 @@ export function AppSidebar() {
         setOpenPopover(false)
     }
 
-    const handleGoToAlbum = (_album: Album) => {
-        setCurrentView('albums')
+    const handleGoToAlbum = (album: Album & { artistName: string }) => {
+        setSelectedAlbum({
+            id: album.id,
+            title: album.title,
+            tracks: album.tracks,
+            artistName: album.artistName
+        })
         setOpenPopover(false)
     }
 
