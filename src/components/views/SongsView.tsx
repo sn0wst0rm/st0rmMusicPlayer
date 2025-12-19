@@ -1,4 +1,4 @@
-import { Virtuoso, VirtuosoHandle } from 'react-virtuoso'
+import { Virtuoso, VirtuosoHandle, ListRange } from 'react-virtuoso'
 import { RefObject, useState, useCallback, useEffect } from "react"
 import { Play, Clock } from "lucide-react"
 import { Button } from "@/components/ui/button"
@@ -11,12 +11,14 @@ interface SongsViewProps {
     currentTrack: Track | null
     isPlaying: boolean
     playTrack: (track: Track, queue: Track[]) => void
+    onSelectAlbum?: (albumId: string) => void
     onScroll: (e: React.UIEvent<HTMLElement>) => void
     tableVirtuosoRef: RefObject<VirtuosoHandle | null>
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     tableComponents: any
     TableHeaderContent: React.FC
     formatDuration: (seconds: number) => string
+    onRangeChanged?: (range: ListRange) => void
 }
 
 // Column configuration - used for type only
@@ -43,10 +45,12 @@ export function SongsView({
     currentTrack,
     isPlaying,
     playTrack,
+    onSelectAlbum,
     onScroll,
     tableVirtuosoRef,
     TableHeaderContent,
-    formatDuration
+    formatDuration,
+    onRangeChanged
 }: SongsViewProps) {
     const items = ["HEADER", ...songs]
 
@@ -262,7 +266,17 @@ export function SongsView({
 
                                         {/* Album column */}
                                         <div className="hidden md:flex text-muted-foreground min-w-0 px-4 border-r border-border/50 h-full items-center">
-                                            <span className="truncate">{track.album?.title}</span>
+                                            <span
+                                                className="truncate hover:underline hover:text-foreground cursor-pointer transition-colors"
+                                                onClick={(e) => {
+                                                    e.stopPropagation()
+                                                    if (onSelectAlbum && track.albumId) {
+                                                        onSelectAlbum(track.albumId)
+                                                    }
+                                                }}
+                                            >
+                                                {track.album?.title}
+                                            </span>
                                         </div>
 
                                         {/* Duration column */}
@@ -274,6 +288,7 @@ export function SongsView({
                             )
                         }}
                         onScroll={onScroll}
+                        rangeChanged={onRangeChanged}
                     />
                 </div>
             </div>
