@@ -2,7 +2,6 @@
 
 import * as React from "react"
 import { Button } from "@/components/ui/button"
-import { ScrollArea } from "@/components/ui/scroll-area"
 import { Skeleton } from "@/components/ui/skeleton"
 import { AudioWaveform } from "@/components/ui/audio-waveform"
 import { Play, Shuffle, ChevronLeft, Pause, ListPlus, Plus } from "lucide-react"

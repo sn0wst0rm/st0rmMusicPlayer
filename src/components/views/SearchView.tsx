@@ -1,17 +1,13 @@
 import * as React from "react"
 import { usePlayerStore, Track } from "@/lib/store"
 import { searchLibrary, SongSearchResult, AlbumSearchResult, ArtistSearchResult } from "@/lib/search"
-import { Album, Artist } from "@/types/music"
+import { Album } from "@/types/music"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Separator } from "@/components/ui/separator"
 import { Skeleton } from "@/components/ui/skeleton"
 import { AlbumCard } from "@/components/album-card"
 import { Play } from "lucide-react"
 import { cn } from "@/lib/utils"
-
-interface SearchAlbum extends Album {
-    artistName: string
-}
 
 interface SearchViewProps {
     playTrack: (track: Track, queue: Track[]) => void

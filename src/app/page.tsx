@@ -35,9 +35,6 @@ export default function Home() {
   const [activeLetter, setActiveLetter] = React.useState('#')
   const { playTrack, currentView, currentTrack, isPlaying, library, setLibrary, selectedAlbum, clearSelectedAlbum, setCurrentView, setSelectedAlbum, previousNavigation, setPreviousNavigation, navigateToArtist, targetArtist, setTargetArtist } = usePlayerStore()
 
-  // Ref for scroll position restoration
-  const scrollContainerRef = React.useRef<HTMLElement | null>(null)
-
   // Track current scroll index for each view type
   const currentScrollIndexRef = React.useRef<number>(0)
   // Track current scroll offset (pixels) for restoration

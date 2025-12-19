@@ -28,9 +28,9 @@ export interface SongSearchResult extends SearchResult<Track> {
     item: Track & { artist: { name: string }, album: { title: string } }
 }
 
-export interface AlbumSearchResult extends SearchResult<Album & { artistName: string }> { }
+export type AlbumSearchResult = SearchResult<Album & { artistName: string }>
 
-export interface ArtistSearchResult extends SearchResult<Artist> { }
+export type ArtistSearchResult = SearchResult<Artist>
 
 export interface SearchResults {
     songs: SongSearchResult[]

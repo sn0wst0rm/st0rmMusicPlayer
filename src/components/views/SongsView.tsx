@@ -156,7 +156,6 @@ export function SongsView({
     const [resizing, setResizing] = useState<{ column: ColumnKey; startX: number; startWidth: number } | null>(null)
 
     // Track if initial sizing has been done - use ref to avoid stale closure in ResizeObserver
-    const [initialSizingDone, setInitialSizingDone] = useState(false)
     const initialSizingDoneRef = useRef(false)
 
     // Container width state (for potential future use)
@@ -181,7 +180,6 @@ export function SongsView({
             duration: DEFAULT_WIDTHS.duration
         })
         initialSizingDoneRef.current = true
-        setInitialSizingDone(true)
     }, [])
 
     // Initial measurement using useLayoutEffect for immediate sizing

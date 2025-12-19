@@ -31,7 +31,7 @@ import { Lightning } from "@/components/icons/lightning"
 import { MarqueeText } from "@/components/ui/marquee-text"
 import { usePlayerStore, Track } from "@/lib/store"
 import { searchLibraryLimited, SongSearchResult, AlbumSearchResult, ArtistSearchResult } from "@/lib/search"
-import { Artist, Album } from "@/types/music"
+import { Album } from "@/types/music"
 
 export function AppSidebar() {
     const { searchQuery, setSearchQuery, currentView, setCurrentView, library, playTrack, setSelectedAlbum } = usePlayerStore()
@@ -73,7 +73,7 @@ export function AppSidebar() {
         setOpenPopover(false)
     }
 
-    const handleGoToArtist = (_artist: Artist) => {
+    const handleGoToArtist = () => {
         // We need a way to filter the Artist View or just switch to it?
         // The current implementation of ArtistView just lists all.
         // For now, switch to Artists view.
@@ -192,7 +192,7 @@ export function AppSidebar() {
                                             {searchResults.artists.length > 0 && (
                                                 <CommandGroup heading="Artists">
                                                     {searchResults.artists.map((artist) => (
-                                                        <CommandItem key={artist.id} onSelect={() => handleGoToArtist(artist)} className="gap-3 overflow-hidden">
+                                                        <CommandItem key={artist.id} onSelect={() => handleGoToArtist()} className="gap-3 overflow-hidden">
                                                             <Mic2 className="h-4 w-4 shrink-0 text-muted-foreground" />
                                                             <div className="flex flex-col min-w-0 flex-1">
                                                                 <MarqueeText text={artist.name} className="text-sm" />
