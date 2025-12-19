@@ -7,11 +7,33 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { PlayCircle } from "lucide-react"
 import { cn } from "@/lib/utils"
 
-export function AlbumCard({ album, playAlbum, artistName, className }: { album: Album, playAlbum: (a: Album, artistName?: string) => void, artistName?: string, className?: string }) {
+interface AlbumCardProps {
+    album: Album
+    playAlbum: (album: Album, artistName?: string) => void
+    onSelect?: (album: Album, artistName?: string) => void
+    artistName?: string
+    className?: string
+}
+
+export function AlbumCard({ album, playAlbum, onSelect, artistName, className }: AlbumCardProps) {
     const [isLoading, setIsLoading] = React.useState(true)
 
+    const handleCardClick = () => {
+        if (onSelect) {
+            onSelect(album, artistName)
+        } else {
+            // Fallback to playing if no onSelect is provided
+            playAlbum(album, artistName)
+        }
+    }
+
+    const handlePlayClick = (e: React.MouseEvent) => {
+        e.stopPropagation()
+        playAlbum(album, artistName)
+    }
+
     return (
-        <Card className={cn("group overflow-hidden border-none shadow-none bg-transparent hover:bg-card/40 transition-colors cursor-pointer", className)} onClick={() => playAlbum(album, artistName)}>
+        <Card className={cn("group overflow-hidden border-none shadow-none bg-transparent hover:bg-card/40 transition-colors cursor-pointer", className)} onClick={handleCardClick}>
             <div className="aspect-square bg-secondary rounded-md mb-3 relative overflow-hidden shadow-sm group-hover:shadow-md transition-all">
                 {isLoading && (
                     <Skeleton className="absolute inset-0 w-full h-full bg-primary/10" />
@@ -33,13 +55,13 @@ export function AlbumCard({ album, playAlbum, artistName, className }: { album: 
                 </div>
 
                 <div className="absolute inset-0 bg-black/20 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center z-10">
-                    <Button size="icon" className="rounded-full h-12 w-12 bg-primary text-primary-foreground hover:bg-primary/90 shadow-xl scale-95 group-hover:scale-100 transition-transform">
+                    <Button size="icon" className="rounded-full h-12 w-12 bg-primary text-primary-foreground hover:bg-primary/90 shadow-xl scale-95 group-hover:scale-100 transition-transform" onClick={handlePlayClick}>
                         <PlayCircle className="h-12 w-12" />
                     </Button>
                 </div>
             </div>
             <div className="space-y-1">
-                <h3 className="font-medium leading-none truncate text-sm">{album.title}</h3>
+                <h3 className="font-medium leading-none truncate text-sm hover:underline">{album.title}</h3>
                 <p className="text-xs text-muted-foreground">{album.tracks.length} {album.tracks.length === 1 ? 'Song' : 'Songs'}</p>
             </div>
         </Card>
