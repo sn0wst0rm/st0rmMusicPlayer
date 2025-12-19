@@ -12,6 +12,7 @@ import { SongsView } from "@/components/views/SongsView"
 import { ArtistsView } from "@/components/views/ArtistsView"
 import { AlbumsView } from "@/components/views/AlbumsView"
 import { SearchView } from "@/components/views/SearchView"
+import { AlbumDetailView } from "@/components/views/AlbumDetailView"
 
 function formatDuration(seconds: number) {
   if (!seconds) return "0:00"
@@ -32,7 +33,15 @@ export default function Home() {
   const [loading, setLoading] = React.useState(true)
   const [scanning, setScanning] = React.useState(false)
   const [activeLetter, setActiveLetter] = React.useState('#')
-  const { playTrack, currentView, currentTrack, isPlaying, library, setLibrary } = usePlayerStore()
+  const { playTrack, currentView, currentTrack, isPlaying, library, setLibrary, selectedAlbum, clearSelectedAlbum, setCurrentView, setSelectedAlbum, previousNavigation, setPreviousNavigation, navigateToArtist, targetArtist, setTargetArtist } = usePlayerStore()
+
+  // Ref for scroll position restoration
+  const scrollContainerRef = React.useRef<HTMLElement | null>(null)
+
+  // Track current scroll index for each view type
+  const currentScrollIndexRef = React.useRef<number>(0)
+  // Track current scroll offset (pixels) for restoration
+  const currentScrollTopRef = React.useRef<number>(0)
 
   // Refs for virtualization
   const tableVirtuosoRef = React.useRef<VirtuosoHandle>(null)
@@ -100,9 +109,38 @@ export default function Home() {
   const handleLetterClick = (letter: string) => {
     setActiveLetter(letter)
     if (currentView === 'songs' && tableVirtuosoRef.current) {
-      const index = allSongs.findIndex(s => s.title.toUpperCase().startsWith(letter))
+      // Find index of first song starting with this letter
+      let index = allSongs.findIndex(s => {
+        const firstChar = s.title.charAt(0).toUpperCase()
+        if (letter === '#') {
+          return !/[A-Z]/.test(firstChar)
+        }
+        return firstChar === letter
+      })
+
+      // If no songs for this letter, find the next available letter
+      if (index === -1) {
+        const letters = '#ABCDEFGHIJKLMNOPQRSTUVWXYZ'
+        const startIdx = letters.indexOf(letter)
+        for (let i = startIdx + 1; i < letters.length; i++) {
+          const nextLetter = letters[i]
+          index = allSongs.findIndex(s => {
+            const firstChar = s.title.charAt(0).toUpperCase()
+            if (nextLetter === '#') {
+              return !/[A-Z]/.test(firstChar)
+            }
+            return firstChar === nextLetter
+          })
+          if (index !== -1) {
+            setActiveLetter(nextLetter)
+            break
+          }
+        }
+      }
+
       if (index !== -1) {
-        tableVirtuosoRef.current.scrollToIndex({ index, align: 'start', behavior: 'smooth', offset: -24 })
+        // Scroll to items[index+1] (the target song) - Virtuoso positions it right below sticky header
+        tableVirtuosoRef.current.scrollToIndex({ index: index + 1, align: 'start', behavior: 'smooth' })
       }
     } else if (currentView === 'artists' && virtuosoRef.current) {
       const index = sortedArtists.findIndex(a => a.name.toUpperCase().startsWith(letter))
@@ -119,9 +157,13 @@ export default function Home() {
 
   // Throttled scroll handler for active letter detection + bar resizing
   const handleScroll = (e: React.UIEvent<HTMLElement>) => {
+    const scrollTop = e.currentTarget.scrollTop
+
+    // Track current scroll position for restoration
+    currentScrollTopRef.current = scrollTop
+
     // 1. Resize Letter Selector
     if (letterSelectorRef.current) {
-      const scrollTop = e.currentTarget.scrollTop
       const config = SCROLL_CONFIG[currentView] || SCROLL_CONFIG.default
       const top = Math.max(config.min, config.start - scrollTop)
       letterSelectorRef.current.style.top = `${top}px`
@@ -176,6 +218,100 @@ export default function Home() {
       playTrack(tracksWithMetadata[0], tracksWithMetadata)
     }
   }
+
+  const selectAlbum = (album: Album, artistName?: string) => {
+    // Save current view and scroll position before navigating to album
+    // Stop momentum scrolling by pinning the scroll position
+    if (currentView !== 'album') {
+      const scroller = document.querySelector('[data-virtuoso-scroller="true"]') as HTMLElement | null
+      let scrollTop = currentScrollTopRef.current
+      if (scroller) {
+        // Read current position and immediately pin it to stop momentum scrolling
+        scrollTop = scroller.scrollTop
+        scroller.scrollTop = scrollTop
+      }
+      console.log('[selectAlbum] Saving index:', currentScrollIndexRef.current, 'from view:', currentView)
+      setPreviousNavigation({
+        view: currentView as 'artists' | 'albums' | 'songs' | 'search',
+        scrollIndex: currentScrollIndexRef.current,
+        scrollTop
+      })
+    }
+    setSelectedAlbum({
+      id: album.id,
+      title: album.title,
+      tracks: album.tracks,
+      artistName: artistName || 'Unknown Artist'
+    })
+  }
+
+  // Look up album by ID from library and navigate to it
+  const selectAlbumById = (albumId: string) => {
+    // Save current view and scroll position before navigating
+    // Stop momentum scrolling by pinning the scroll position
+    if (currentView !== 'album') {
+      const scroller = document.querySelector('[data-virtuoso-scroller="true"]') as HTMLElement | null
+      let scrollTop = currentScrollTopRef.current
+      if (scroller) {
+        // Read current position and immediately pin it to stop momentum scrolling
+        scrollTop = scroller.scrollTop
+        scroller.scrollTop = scrollTop
+      }
+      setPreviousNavigation({
+        view: currentView as 'artists' | 'albums' | 'songs' | 'search',
+        scrollIndex: currentScrollIndexRef.current,
+        scrollTop
+      })
+    }
+    for (const artist of library) {
+      const album = artist.albums.find(a => a.id === albumId)
+      if (album) {
+        setSelectedAlbum({
+          id: album.id,
+          title: album.title,
+          tracks: album.tracks,
+          artistName: artist.name
+        })
+        return
+      }
+    }
+  }
+
+  // Handle back navigation from album view
+  const handleAlbumBack = React.useCallback(() => {
+    clearSelectedAlbum()
+    if (previousNavigation) {
+      const targetView = previousNavigation.view
+      const savedScrollTop = previousNavigation.scrollTop
+
+      // Clear navigation state first
+      setPreviousNavigation(null)
+      setCurrentView(targetView)
+
+      // Restore scroll position after Virtuoso fully initializes
+      // Use only pixel-based restoration with sufficient delay for Virtuoso to stabilize
+      if (savedScrollTop !== undefined && savedScrollTop > 0) {
+        // Multiple attempts to ensure scroll sticks after Virtuoso stabilizes
+        const attemptRestore = (attempt: number) => {
+          const scroller = document.querySelector('[data-virtuoso-scroller="true"]')
+          if (scroller) {
+            console.log('[handleAlbumBack] Restoring scroll to:', savedScrollTop, 'attempt:', attempt)
+            scroller.scrollTop = savedScrollTop
+            // Verify it stuck and retry if needed
+            if (attempt < 2 && Math.abs(scroller.scrollTop - savedScrollTop) > 10) {
+              setTimeout(() => attemptRestore(attempt + 1), 200)
+            }
+          } else if (attempt < 3) {
+            setTimeout(() => attemptRestore(attempt + 1), 100)
+          }
+        }
+        // Wait for Virtuoso to fully initialize before first attempt
+        setTimeout(() => attemptRestore(0), 300)
+      }
+    } else {
+      setCurrentView('albums')
+    }
+  }, [clearSelectedAlbum, setCurrentView, previousNavigation, setPreviousNavigation])
 
   // --- Render Helpers ---
 
@@ -257,10 +393,21 @@ export default function Home() {
     )
   }
 
+  // 0. Album Detail View
+  if (currentView === 'album' && selectedAlbum) {
+    return (
+      <AlbumDetailView
+        album={selectedAlbum}
+        onBack={handleAlbumBack}
+        onArtistClick={() => navigateToArtist(selectedAlbum.artistName)}
+      />
+    )
+  }
+
   // 1. Search View
   if (currentView === 'search') {
     return (
-      <SearchView playTrack={playTrack} playAlbum={playAlbum} />
+      <SearchView playTrack={playTrack} playAlbum={playAlbum} onSelectAlbum={selectAlbum} />
     )
   }
   // 2. Songs View
@@ -273,11 +420,28 @@ export default function Home() {
           currentTrack={currentTrack}
           isPlaying={isPlaying}
           playTrack={playTrack}
+          onSelectAlbum={selectAlbumById}
           onScroll={handleScroll}
           tableVirtuosoRef={tableVirtuosoRef}
           tableComponents={tableComponents}
           TableHeaderContent={TableHeaderContent}
           formatDuration={formatDuration}
+          onRangeChanged={(range) => {
+            const prevIndex = currentScrollIndexRef.current
+            currentScrollIndexRef.current = range.startIndex
+            // Detect scroll direction: scrolling down if startIndex increased
+            const scrollingDown = range.startIndex > prevIndex
+            // When scrolling down, Virtuoso's startIndex lags by 1, so compensate
+            const songIndex = scrollingDown
+              ? Math.min(range.startIndex + 1, allSongs.length - 1)
+              : (range.startIndex > 0 ? range.startIndex : 0)
+            const song = allSongs[songIndex]
+            if (song) {
+              let letter = song.title.charAt(0).toUpperCase()
+              if (!/[A-Z]/.test(letter)) letter = '#'
+              if (letter !== activeLetter) setActiveLetter(letter)
+            }
+          }}
         />
         <div
           ref={letterSelectorRef}
@@ -300,9 +464,13 @@ export default function Home() {
         <ArtistsView
           artists={sortedArtists}
           playAlbum={playAlbum}
+          onSelectAlbum={selectAlbum}
           artistsComponents={artistsComponents}
           onScroll={handleScroll}
           virtuosoRef={virtuosoRef}
+          targetArtist={targetArtist}
+          onTargetArtistScrolled={() => setTargetArtist(null)}
+          onRangeChanged={(range) => { currentScrollIndexRef.current = range.startIndex }}
         />
         <div
           ref={letterSelectorRef}
@@ -325,9 +493,11 @@ export default function Home() {
         <AlbumsView
           groupedAlbums={groupedAlbums}
           playAlbum={playAlbum}
+          onSelectAlbum={selectAlbum}
           albumsComponents={groupedAlbumsComponents}
           onScroll={handleScroll}
           virtuosoRef={virtuosoRef}
+          onRangeChanged={(range) => { currentScrollIndexRef.current = range.startIndex }}
         />
         <div
           ref={letterSelectorRef}
