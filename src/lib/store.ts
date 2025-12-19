@@ -1,6 +1,18 @@
 import { create } from 'zustand'
 import { Artist } from '@/types/music'
 
+// UUID helper with fallback for older browsers (iOS Safari)
+function generateUUID(): string {
+    if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+        return crypto.randomUUID()
+    }
+    // Fallback for older browsers
+    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+        const r = Math.random() * 16 | 0
+        const v = c === 'x' ? r : (r & 0x3 | 0x8)
+        return v.toString(16)
+    })
+}
 export interface Track {
     id: string
     title: string
@@ -21,6 +33,19 @@ export interface QueueItem {
     track: Track
 }
 
+export interface SelectedAlbum {
+    id: string
+    title: string
+    tracks: Track[]
+    artistName: string
+}
+
+export interface NavigationState {
+    view: 'artists' | 'albums' | 'songs' | 'search'
+    scrollTop?: number
+    scrollIndex?: number  // For Virtuoso views
+}
+
 interface PlayerState {
     currentTrack: Track | null
     isPlaying: boolean
@@ -32,9 +57,12 @@ interface PlayerState {
     sidebarOpen: boolean
     queueOpen: boolean
     searchQuery: string
-    currentView: 'artists' | 'albums' | 'songs' | 'search'
+    currentView: 'artists' | 'albums' | 'songs' | 'search' | 'album'
     repeatMode: 'off' | 'all' | 'one'
     library: Artist[]
+    selectedAlbum: SelectedAlbum | null
+    previousNavigation: NavigationState | null
+    targetArtist: string | null  // Artist name to scroll to
 
     // Actions
     setIsPlaying: (isPlaying: boolean) => void
@@ -48,11 +76,16 @@ interface PlayerState {
     reorderQueue: (newQueue: QueueItem[]) => void
     toggleShuffle: () => void
     setSearchQuery: (query: string) => void
-    setCurrentView: (view: 'artists' | 'albums' | 'songs' | 'search') => void
+    setCurrentView: (view: 'artists' | 'albums' | 'songs' | 'search' | 'album') => void
     toggleRepeat: () => void
     setQueueOpen: (open: boolean) => void
     toggleQueue: () => void
     setLibrary: (library: Artist[]) => void
+    setSelectedAlbum: (album: SelectedAlbum) => void
+    clearSelectedAlbum: () => void
+    setPreviousNavigation: (nav: NavigationState | null) => void
+    setTargetArtist: (artistName: string | null) => void
+    navigateToArtist: (artistName: string) => void
 }
 
 export const usePlayerStore = create<PlayerState>((set, get) => ({
@@ -69,6 +102,9 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
     currentView: 'songs',
     repeatMode: 'off',
     library: [],
+    selectedAlbum: null,
+    previousNavigation: null,
+    targetArtist: null,
 
     setIsPlaying: (isPlaying) => set({ isPlaying }),
     setVolume: (volume) => set({ volume }),
@@ -100,8 +136,8 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
         const historyTracks = sourceList.slice(0, index)
         const upcomingTracks = sourceList.slice(index + 1)
 
-        const historyItems: QueueItem[] = historyTracks.map(t => ({ uniqueId: crypto.randomUUID(), track: t }))
-        const upcomingItems: QueueItem[] = upcomingTracks.map(t => ({ uniqueId: crypto.randomUUID(), track: t }))
+        const historyItems: QueueItem[] = historyTracks.map(t => ({ uniqueId: generateUUID(), track: t }))
+        const upcomingItems: QueueItem[] = upcomingTracks.map(t => ({ uniqueId: generateUUID(), track: t }))
 
         set({
             currentTrack: fullTrack,
@@ -143,7 +179,7 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
                     const [first, ...rest] = allItems.map(item => item.track) // Extract tracks to re-wrap with new IDs
 
                     // Helper to wrap
-                    const restItems = rest.map(t => ({ uniqueId: crypto.randomUUID(), track: t }))
+                    const restItems = rest.map(t => ({ uniqueId: generateUUID(), track: t }))
 
                     set({
                         currentTrack: first,
@@ -180,7 +216,7 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
             currentTrack: nextTrack,
             queue: rest,
             originalQueue: newOriginalQueue,
-            history: state.currentTrack ? [...state.history, { uniqueId: crypto.randomUUID(), track: state.currentTrack }] : state.history,
+            history: state.currentTrack ? [...state.history, { uniqueId: generateUUID(), track: state.currentTrack }] : state.history,
             isPlaying: true
         })
     },
@@ -192,7 +228,7 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
         const newHistory = state.history.slice(0, -1)
 
         const currentTrack = state.currentTrack
-        const currentItem: QueueItem | null = currentTrack ? { uniqueId: crypto.randomUUID(), track: currentTrack } : null
+        const currentItem: QueueItem | null = currentTrack ? { uniqueId: generateUUID(), track: currentTrack } : null
 
         const newQueue = currentItem ? [currentItem, ...state.queue] : state.queue
         const newOriginalQueue = currentItem ? [currentItem, ...state.originalQueue] : state.originalQueue
@@ -206,7 +242,7 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
         })
     },
     addToQueue: (track) => set((state) => {
-        const item: QueueItem = { uniqueId: crypto.randomUUID(), track }
+        const item: QueueItem = { uniqueId: generateUUID(), track }
         return {
             queue: [...state.queue, item],
             originalQueue: [...state.originalQueue, item]
@@ -217,7 +253,7 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
         originalQueue: state.originalQueue.filter(t => t.uniqueId !== uniqueId)
     })),
     playNext: (track) => set((state) => {
-        const item: QueueItem = { uniqueId: crypto.randomUUID(), track }
+        const item: QueueItem = { uniqueId: generateUUID(), track }
         const newQueue = [item, ...state.queue]
         const newOriginalQueue = [item, ...state.originalQueue]
         return {
@@ -251,5 +287,10 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
     }),
     setQueueOpen: (open) => set({ queueOpen: open }),
     toggleQueue: () => set((state) => ({ queueOpen: !state.queueOpen })),
-    setLibrary: (library) => set({ library })
+    setLibrary: (library) => set({ library }),
+    setSelectedAlbum: (album) => set({ selectedAlbum: album, currentView: 'album' }),
+    clearSelectedAlbum: () => set({ selectedAlbum: null }),
+    setPreviousNavigation: (nav) => set({ previousNavigation: nav }),
+    setTargetArtist: (artistName) => set({ targetArtist: artistName }),
+    navigateToArtist: (artistName) => set({ currentView: 'artists', targetArtist: artistName, selectedAlbum: null })
 }))
