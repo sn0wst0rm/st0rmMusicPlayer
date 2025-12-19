@@ -421,6 +421,7 @@ export default function Home() {
           isPlaying={isPlaying}
           playTrack={playTrack}
           onSelectAlbum={selectAlbumById}
+          onArtistClick={navigateToArtist}
           onScroll={handleScroll}
           tableVirtuosoRef={tableVirtuosoRef}
           tableComponents={tableComponents}
