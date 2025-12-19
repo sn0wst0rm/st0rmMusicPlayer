@@ -135,6 +135,35 @@
   }
 }
 
+/* Audio waveform animation - bouncing bars for playing indicator */
+/* Uses scaleY for smooth height animation from bottom with randomized feel */
+@keyframes waveform-random {
+  0% {
+    transform: scaleY(0.2);
+  }
+
+  25% {
+    transform: scaleY(0.9);
+  }
+
+  50% {
+    transform: scaleY(0.4);
+  }
+
+  75% {
+    transform: scaleY(1);
+  }
+
+  100% {
+    transform: scaleY(0.2);
+  }
+}
+
+.animate-waveform-random {
+  animation: waveform-random 0.5s ease-in-out infinite;
+  transform-origin: bottom;
+}
+
 @keyframes marquee {
   0% {
     transform: translateX(0);
