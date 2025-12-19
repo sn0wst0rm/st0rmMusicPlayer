@@ -4,7 +4,8 @@ import * as React from "react"
 import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Skeleton } from "@/components/ui/skeleton"
-import { Play, Shuffle, ChevronLeft, Pause } from "lucide-react"
+import { AudioWaveform } from "@/components/ui/audio-waveform"
+import { Play, Shuffle, ChevronLeft, Pause, ListPlus, Plus } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { usePlayerStore, Track, SelectedAlbum } from "@/lib/store"
 
@@ -32,7 +33,7 @@ function formatTotalDuration(tracks: Track[]) {
 }
 
 export function AlbumDetailView({ album, onBack, onArtistClick }: AlbumDetailViewProps) {
-    const { playTrack, currentTrack, isPlaying, setIsPlaying } = usePlayerStore()
+    const { playTrack, currentTrack, isPlaying, setIsPlaying, playNext, addToQueue } = usePlayerStore()
     const [isCoverLoaded, setIsCoverLoaded] = React.useState(false)
 
     // Prepare tracks with metadata for playback
@@ -160,38 +161,47 @@ export function AlbumDetailView({ album, onBack, onArtistClick }: AlbumDetailVie
                                 isCurrentTrack(track.id) && "bg-primary/10 hover:bg-primary/15"
                             )}
                         >
-                            {/* Track Number / Play Button */}
+                            {/* Track Number / Play Button / Waveform */}
                             <div className="w-8 h-8 flex items-center justify-center flex-shrink-0">
                                 {isCurrentTrackPlaying(track.id) ? (
-                                    <Button
-                                        variant="ghost"
-                                        size="icon"
-                                        className="h-8 w-8 text-primary"
-                                        onClick={(e) => {
-                                            e.stopPropagation()
-                                            setIsPlaying(false)
-                                        }}
-                                    >
-                                        <Pause className="h-4 w-4 fill-current" />
-                                    </Button>
+                                    // Currently playing: show waveform, pause on hover
+                                    <div className="relative h-8 w-8 flex items-center justify-center">
+                                        <AudioWaveform className="group-hover:hidden" />
+                                        <Button
+                                            variant="ghost"
+                                            size="icon"
+                                            className="h-8 w-8 text-primary hidden group-hover:flex"
+                                            onClick={(e) => {
+                                                e.stopPropagation()
+                                                setIsPlaying(false)
+                                            }}
+                                        >
+                                            <Pause className="h-4 w-4 fill-current" />
+                                        </Button>
+                                    </div>
                                 ) : isCurrentTrack(track.id) ? (
-                                    <Button
-                                        variant="ghost"
-                                        size="icon"
-                                        className="h-8 w-8 text-primary"
-                                        onClick={(e) => {
-                                            e.stopPropagation()
-                                            setIsPlaying(true)
-                                        }}
-                                    >
-                                        <Play className="h-4 w-4 fill-current" />
-                                    </Button>
+                                    // Current track but paused: show pause icon, play on hover
+                                    <div className="relative h-8 w-8 flex items-center justify-center">
+                                        <Pause className="h-4 w-4 fill-primary text-primary group-hover:hidden" />
+                                        <Button
+                                            variant="ghost"
+                                            size="icon"
+                                            className="h-8 w-8 text-primary hidden group-hover:flex"
+                                            onClick={(e) => {
+                                                e.stopPropagation()
+                                                setIsPlaying(true)
+                                            }}
+                                        >
+                                            <Play className="h-4 w-4 fill-current" />
+                                        </Button>
+                                    </div>
                                 ) : (
+                                    // Not current track: show number, filled play on hover
                                     <>
                                         <span className="text-muted-foreground text-sm group-hover:hidden">
                                             {index + 1}
                                         </span>
-                                        <Play className="h-4 w-4 text-foreground hidden group-hover:block" />
+                                        <Play className="h-4 w-4 text-primary fill-primary hidden group-hover:block" />
                                     </>
                                 )}
                             </div>
@@ -204,6 +214,34 @@ export function AlbumDetailView({ album, onBack, onArtistClick }: AlbumDetailVie
                                 )}>
                                     {track.title}
                                 </p>
+                            </div>
+
+                            {/* Queue actions - show on hover */}
+                            <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                                <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    className="h-8 w-8 text-muted-foreground hover:text-foreground"
+                                    title="Play Next"
+                                    onClick={(e) => {
+                                        e.stopPropagation()
+                                        playNext(track)
+                                    }}
+                                >
+                                    <ListPlus className="h-4 w-4" />
+                                </Button>
+                                <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    className="h-8 w-8 text-muted-foreground hover:text-foreground"
+                                    title="Add to Queue"
+                                    onClick={(e) => {
+                                        e.stopPropagation()
+                                        addToQueue(track)
+                                    }}
+                                >
+                                    <Plus className="h-4 w-4" />
+                                </Button>
                             </div>
 
                             {/* Duration */}
