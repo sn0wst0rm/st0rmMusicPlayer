@@ -25,16 +25,19 @@ import {
     PopoverAnchor,
 } from "@/components/ui/popover"
 import * as React from "react"
-import { ListMusic, Mic2, Search as SearchIcon, Music, Import, Disc } from "lucide-react"
+import { ListMusic, Mic2, Search as SearchIcon, Music, Import, Disc, Plus } from "lucide-react"
 
 import { Lightning } from "@/components/icons/lightning"
 import { MarqueeText } from "@/components/ui/marquee-text"
 import { usePlayerStore, Track } from "@/lib/store"
 import { searchLibraryLimited, SongSearchResult, AlbumSearchResult, ArtistSearchResult } from "@/lib/search"
-import { Album } from "@/types/music"
+import { Album, Playlist } from "@/types/music"
 
 export function AppSidebar() {
-    const { searchQuery, setSearchQuery, currentView, setCurrentView, library, playTrack, setSelectedAlbum } = usePlayerStore()
+    const {
+        searchQuery, setSearchQuery, currentView, setCurrentView, library, playTrack, setSelectedAlbum,
+        playlists, setPlaylists, navigateToPlaylist, selectedPlaylistId
+    } = usePlayerStore()
     const { setOpen, open } = useSidebar()
     const searchInputRef = React.useRef<React.ElementRef<typeof SidebarInput>>(null)
     const containerRef = React.useRef<HTMLDivElement>(null)
@@ -68,6 +71,22 @@ export function AppSidebar() {
         }
     }, [open])
 
+    // Fetch playlists on mount
+    React.useEffect(() => {
+        const fetchPlaylists = async () => {
+            try {
+                const response = await fetch('/api/playlists')
+                if (response.ok) {
+                    const data = await response.json()
+                    setPlaylists(data)
+                }
+            } catch (error) {
+                console.error('Failed to fetch playlists:', error)
+            }
+        }
+        fetchPlaylists()
+    }, [setPlaylists])
+
     const handlePlaySong = (track: Track) => {
         playTrack(track, [track]) // Play single track for now
         setOpenPopover(false)
@@ -90,6 +109,23 @@ export function AppSidebar() {
             artistName: album.artistName
         })
         setOpenPopover(false)
+    }
+
+    const handleCreatePlaylist = async () => {
+        try {
+            const response = await fetch('/api/playlists', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name: 'New Playlist' })
+            })
+            if (response.ok) {
+                const newPlaylist: Playlist = await response.json()
+                setPlaylists([newPlaylist, ...playlists])
+                navigateToPlaylist(newPlaylist.id)
+            }
+        } catch (error) {
+            console.error('Failed to create playlist:', error)
+        }
     }
 
 
@@ -230,7 +266,10 @@ export function AppSidebar() {
                     <SidebarGroupContent>
                         <SidebarMenu>
                             <SidebarMenuItem>
-                                <SidebarMenuButton>
+                                <SidebarMenuButton
+                                    isActive={currentView === 'import'}
+                                    onClick={() => setCurrentView('import')}
+                                >
                                     <Import />
                                     <span>Import</span>
                                 </SidebarMenuButton>
@@ -262,6 +301,42 @@ export function AppSidebar() {
                                     <span>Songs</span>
                                 </SidebarMenuButton>
                             </SidebarMenuItem>
+                        </SidebarMenu>
+                    </SidebarGroupContent>
+                </SidebarGroup>
+
+                <SidebarGroup>
+                    <div className="flex items-center justify-between pr-2">
+                        <SidebarGroupLabel>Playlists</SidebarGroupLabel>
+                        <button
+                            onClick={handleCreatePlaylist}
+                            className="p-1 rounded-md hover:bg-accent transition-colors group-data-[collapsible=icon]:hidden"
+                            title="Create Playlist"
+                        >
+                            <Plus className="size-4 text-muted-foreground hover:text-foreground" />
+                        </button>
+                    </div>
+                    <SidebarGroupContent>
+                        <SidebarMenu>
+                            {playlists.length === 0 ? (
+                                <SidebarMenuItem>
+                                    <span className="px-2 py-1.5 text-xs text-muted-foreground group-data-[collapsible=icon]:hidden">
+                                        No playlists yet
+                                    </span>
+                                </SidebarMenuItem>
+                            ) : (
+                                playlists.map((playlist) => (
+                                    <SidebarMenuItem key={playlist.id}>
+                                        <SidebarMenuButton
+                                            isActive={currentView === 'playlist' && selectedPlaylistId === playlist.id}
+                                            onClick={() => navigateToPlaylist(playlist.id)}
+                                        >
+                                            <ListMusic className="size-4" />
+                                            <span className="truncate">{playlist.name}</span>
+                                        </SidebarMenuButton>
+                                    </SidebarMenuItem>
+                                ))
+                            )}
                         </SidebarMenu>
                     </SidebarGroupContent>
                 </SidebarGroup>

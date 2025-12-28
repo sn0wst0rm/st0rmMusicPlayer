@@ -13,6 +13,8 @@ import { ArtistsView } from "@/components/views/ArtistsView"
 import { AlbumsView } from "@/components/views/AlbumsView"
 import { SearchView } from "@/components/views/SearchView"
 import { AlbumDetailView } from "@/components/views/AlbumDetailView"
+import { PlaylistView } from "@/components/views/PlaylistView"
+import { ImportView } from "@/components/views/ImportView"
 
 function formatDuration(seconds: number) {
   if (!seconds) return "0:00"
@@ -33,7 +35,7 @@ export default function Home() {
   const [loading, setLoading] = React.useState(true)
   const [scanning, setScanning] = React.useState(false)
   const [activeLetter, setActiveLetter] = React.useState('#')
-  const { playTrack, currentView, currentTrack, isPlaying, library, setLibrary, selectedAlbum, clearSelectedAlbum, setCurrentView, setSelectedAlbum, previousNavigation, setPreviousNavigation, navigateToArtist, targetArtist, setTargetArtist } = usePlayerStore()
+  const { playTrack, currentView, currentTrack, isPlaying, library, setLibrary, selectedAlbum, clearSelectedAlbum, setCurrentView, setSelectedAlbum, previousNavigation, setPreviousNavigation, navigateToArtist, targetArtist, setTargetArtist, selectedPlaylistId, setSelectedPlaylistId } = usePlayerStore()
 
   // Track current scroll index for each view type
   const currentScrollIndexRef = React.useRef<number>(0)
@@ -238,7 +240,12 @@ export default function Home() {
       id: album.id,
       title: album.title,
       tracks: album.tracks,
-      artistName: artistName || 'Unknown Artist'
+      artistName: artistName || 'Unknown Artist',
+      description: album.description ?? undefined,
+      copyright: album.copyright ?? undefined,
+      genre: album.genre ?? undefined,
+      releaseDate: album.releaseDate ?? undefined,
+      recordLabel: album.recordLabel ?? undefined
     })
   }
 
@@ -267,7 +274,12 @@ export default function Home() {
           id: album.id,
           title: album.title,
           tracks: album.tracks,
-          artistName: artist.name
+          artistName: artist.name,
+          description: album.description ?? undefined,
+          copyright: album.copyright ?? undefined,
+          genre: album.genre ?? undefined,
+          releaseDate: album.releaseDate ?? undefined,
+          recordLabel: album.recordLabel ?? undefined
         })
         return
       }
@@ -399,6 +411,24 @@ export default function Home() {
         onArtistClick={() => navigateToArtist(selectedAlbum.artistName)}
       />
     )
+  }
+
+  // 0.5. Playlist View
+  if (currentView === 'playlist' && selectedPlaylistId) {
+    return (
+      <PlaylistView
+        playlistId={selectedPlaylistId}
+        onBack={() => {
+          setSelectedPlaylistId(null)
+          setCurrentView('songs')
+        }}
+      />
+    )
+  }
+
+  // 0.6. Import View
+  if (currentView === 'import') {
+    return <ImportView />
   }
 
   // 1. Search View

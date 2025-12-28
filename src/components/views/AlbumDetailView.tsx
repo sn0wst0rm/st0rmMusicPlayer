@@ -4,7 +4,7 @@ import * as React from "react"
 import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
 import { AudioWaveform } from "@/components/ui/audio-waveform"
-import { Play, Shuffle, ChevronLeft, Pause, ListPlus, Plus } from "lucide-react"
+import { Play, Shuffle, ChevronLeft, ChevronDown, ChevronUp, Pause, ListPlus, Plus } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { usePlayerStore, Track, SelectedAlbum } from "@/lib/store"
 
@@ -34,6 +34,7 @@ function formatTotalDuration(tracks: Track[]) {
 export function AlbumDetailView({ album, onBack, onArtistClick }: AlbumDetailViewProps) {
     const { playTrack, currentTrack, isPlaying, setIsPlaying, playNext, addToQueue } = usePlayerStore()
     const [isCoverLoaded, setIsCoverLoaded] = React.useState(false)
+    const [isDescriptionExpanded, setIsDescriptionExpanded] = React.useState(false)
 
     // Prepare tracks with metadata for playback
     const tracksWithMetadata = React.useMemo(() => {
@@ -116,14 +117,21 @@ export function AlbumDetailView({ album, onBack, onArtistClick }: AlbumDetailVie
                         <p className="text-sm font-medium text-muted-foreground uppercase tracking-wider mb-1">Album</p>
                         <h1 className="text-3xl md:text-4xl font-bold tracking-tight mb-2">{album.title}</h1>
                         <p
-                            className="text-xl text-primary hover:underline cursor-pointer mb-4"
+                            className="text-xl text-primary hover:underline cursor-pointer mb-2"
                             onClick={onArtistClick}
                         >
                             {album.artistName}
                         </p>
-                        <p className="text-sm text-muted-foreground mb-6">
+                        <p className="text-sm text-muted-foreground mb-2">
                             {album.tracks.length} {album.tracks.length === 1 ? 'song' : 'songs'} • {formatTotalDuration(album.tracks)}
+                            {album.genre && ` • ${album.genre}`}
+                            {album.releaseDate && ` • ${new Date(album.releaseDate).getFullYear()}`}
                         </p>
+                        {album.recordLabel && (
+                            <p className="text-xs text-muted-foreground mb-4">
+                                {album.recordLabel}
+                            </p>
+                        )}
 
                         {/* Action Buttons - matching Add Folder button style */}
                         <div className="flex gap-3 justify-center md:justify-start">
@@ -147,6 +155,34 @@ export function AlbumDetailView({ album, onBack, onArtistClick }: AlbumDetailVie
                         </div>
                     </div>
                 </div>
+
+                {/* Album Description - Before track list */}
+                {album.description && (
+                    <div className="mb-6 p-4 rounded-xl bg-card/30 backdrop-blur-sm border">
+                        <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider mb-2">About</h3>
+                        <div
+                            className={cn(
+                                "text-sm text-foreground/80 leading-relaxed overflow-hidden transition-all duration-300",
+                                !isDescriptionExpanded && "line-clamp-4"
+                            )}
+                            dangerouslySetInnerHTML={{ __html: album.description }}
+                        />
+                        {album.description.length > 400 && (
+                            <Button
+                                variant="ghost"
+                                size="sm"
+                                className="mt-2 px-3 py-2 h-auto text-muted-foreground hover:text-foreground"
+                                onClick={() => setIsDescriptionExpanded(!isDescriptionExpanded)}
+                            >
+                                {isDescriptionExpanded ? (
+                                    <><ChevronUp className="h-4 w-4 mr-1" />Show less</>
+                                ) : (
+                                    <><ChevronDown className="h-4 w-4 mr-1" />Read more</>
+                                )}
+                            </Button>
+                        )}
+                    </div>
+                )}
 
                 {/* Track List */}
                 <div className="rounded-xl overflow-hidden border bg-card/50 backdrop-blur-sm">
@@ -250,6 +286,14 @@ export function AlbumDetailView({ album, onBack, onArtistClick }: AlbumDetailVie
                         </div>
                     ))}
                 </div>
+
+
+                {/* Copyright */}
+                {album.copyright && (
+                    <p className="mt-6 text-xs text-muted-foreground/70">
+                        {album.copyright}
+                    </p>
+                )}
             </div>
         </div>
     )
