@@ -1,0 +1,392 @@
+import { NextResponse } from 'next/server';
+import db from '@/lib/db';
+
+const GAMDL_SERVICE_URL = process.env.GAMDL_SERVICE_URL || 'http://127.0.0.1:5100';
+
+interface RouteParams {
+    params: Promise<{ jobId: string }>;
+}
+
+// Metadata type from gamdl service
+interface TrackMetadata {
+    title: string;
+    artist: string;
+    album: string;
+    albumArtist?: string;
+    duration?: number;
+    trackNumber?: number;
+    trackTotal?: number;
+    discNumber?: number;
+    discTotal?: number;
+    genre?: string;
+    composer?: string;
+    comment?: string;
+    copyright?: string;
+    rating?: number;
+    isGapless?: boolean;
+    isCompilation?: boolean;
+    releaseDate?: string;
+    lyrics?: string;
+    appleMusicId?: string;
+    albumAppleMusicId?: string;
+    storefront?: string;
+    titleSort?: string;
+    artistSort?: string;
+    albumSort?: string;
+    composerSort?: string;
+    // Extended Apple Music metadata for albums
+    description?: string;
+    recordLabel?: string;
+    upc?: string;
+    isSingle?: boolean;
+    isMasteredForItunes?: boolean;
+    artworkBgColor?: string;
+    artworkTextColor1?: string;
+    artworkTextColor2?: string;
+    artworkTextColor3?: string;
+    artworkTextColor4?: string;
+}
+
+interface TrackCompleteEvent {
+    filePath: string;
+    lyricsPath?: string;
+    coverPath?: string;
+    metadata: TrackMetadata;
+    current: number;
+    total: number;
+}
+
+// Helper to upsert artist, album, track into database
+async function insertTrackToLibrary(event: TrackCompleteEvent): Promise<{ albumId: string; artistId: string }> {
+    const { filePath, lyricsPath, coverPath, metadata } = event;
+
+    // 1. Upsert Artist
+    const artistName = metadata.albumArtist || metadata.artist || 'Unknown Artist';
+    const artist = await db.artist.upsert({
+        where: { name: artistName },
+        create: {
+            name: artistName,
+            sortName: metadata.artistSort || null,
+            appleMusicId: null // We don't have artist Apple Music ID in track metadata
+        },
+        update: {
+            sortName: metadata.artistSort || undefined
+        }
+    });
+
+    // 2. Upsert Album
+    const albumTitle = metadata.album || 'Unknown Album';
+    const album = await db.album.upsert({
+        where: {
+            title_artistId: {
+                title: albumTitle,
+                artistId: artist.id
+            }
+        },
+        create: {
+            title: albumTitle,
+            artistId: artist.id,
+            appleMusicId: metadata.albumAppleMusicId || null,
+            genre: metadata.genre || null,
+            releaseDate: metadata.releaseDate ? new Date(metadata.releaseDate) : null,
+            copyright: metadata.copyright || null,
+            trackTotal: metadata.trackTotal || null,
+            discTotal: metadata.discTotal || null,
+            isCompilation: metadata.isCompilation || false,
+            sortTitle: metadata.albumSort || null,
+            // Set cover paths if available
+            coverLargePath: coverPath || null,
+            // Extended Apple Music metadata
+            description: metadata.description || null,
+            recordLabel: metadata.recordLabel || null,
+            upc: metadata.upc || null,
+            isSingle: metadata.isSingle || false,
+            isMasteredForItunes: metadata.isMasteredForItunes || false,
+            artworkBgColor: metadata.artworkBgColor || null,
+            artworkTextColor1: metadata.artworkTextColor1 || null,
+            artworkTextColor2: metadata.artworkTextColor2 || null,
+            artworkTextColor3: metadata.artworkTextColor3 || null,
+            artworkTextColor4: metadata.artworkTextColor4 || null
+        },
+        update: {
+            appleMusicId: metadata.albumAppleMusicId || undefined,
+            genre: metadata.genre || undefined,
+            releaseDate: metadata.releaseDate ? new Date(metadata.releaseDate) : undefined,
+            copyright: metadata.copyright || undefined,
+            trackTotal: metadata.trackTotal || undefined,
+            discTotal: metadata.discTotal || undefined,
+            isCompilation: metadata.isCompilation || undefined,
+            sortTitle: metadata.albumSort || undefined,
+            coverLargePath: coverPath || undefined,
+            // Extended Apple Music metadata
+            description: metadata.description || undefined,
+            recordLabel: metadata.recordLabel || undefined,
+            upc: metadata.upc || undefined,
+            isSingle: metadata.isSingle !== undefined ? metadata.isSingle : undefined,
+            isMasteredForItunes: metadata.isMasteredForItunes !== undefined ? metadata.isMasteredForItunes : undefined,
+            artworkBgColor: metadata.artworkBgColor || undefined,
+            artworkTextColor1: metadata.artworkTextColor1 || undefined,
+            artworkTextColor2: metadata.artworkTextColor2 || undefined,
+            artworkTextColor3: metadata.artworkTextColor3 || undefined,
+            artworkTextColor4: metadata.artworkTextColor4 || undefined
+        }
+    });
+
+    // 3. Upsert Track
+    await db.track.upsert({
+        where: { filePath },
+        create: {
+            title: metadata.title || 'Unknown Track',
+            artistId: artist.id,
+            albumId: album.id,
+            filePath,
+            duration: metadata.duration || null,
+            trackNumber: metadata.trackNumber || null,
+            trackTotal: metadata.trackTotal || null,
+            discNumber: metadata.discNumber || null,
+            discTotal: metadata.discTotal || null,
+            genre: metadata.genre || null,
+            composer: metadata.composer || null,
+            comment: metadata.comment || null,
+            copyright: metadata.copyright || null,
+            rating: metadata.rating || null,
+            isGapless: metadata.isGapless || null,
+            lyricsPath: lyricsPath || null,
+            lyrics: metadata.lyrics || null,
+            appleMusicId: metadata.appleMusicId || null,
+            storefront: metadata.storefront || null,
+            titleSort: metadata.titleSort || null,
+            artistSort: metadata.artistSort || null,
+            albumSort: metadata.albumSort || null,
+            composerSort: metadata.composerSort || null
+        },
+        update: {
+            title: metadata.title || undefined,
+            duration: metadata.duration || undefined,
+            trackNumber: metadata.trackNumber || undefined,
+            trackTotal: metadata.trackTotal || undefined,
+            discNumber: metadata.discNumber || undefined,
+            discTotal: metadata.discTotal || undefined,
+            genre: metadata.genre || undefined,
+            composer: metadata.composer || undefined,
+            comment: metadata.comment || undefined,
+            copyright: metadata.copyright || undefined,
+            rating: metadata.rating || undefined,
+            isGapless: metadata.isGapless || undefined,
+            lyricsPath: lyricsPath || undefined,
+            lyrics: metadata.lyrics || undefined,
+            appleMusicId: metadata.appleMusicId || undefined,
+            storefront: metadata.storefront || undefined,
+            titleSort: metadata.titleSort || undefined,
+            artistSort: metadata.artistSort || undefined,
+            albumSort: metadata.albumSort || undefined,
+            composerSort: metadata.composerSort || undefined
+        }
+    });
+
+    return { albumId: album.id, artistId: artist.id };
+}
+
+// GET stream download status via SSE
+export async function GET(request: Request, { params }: RouteParams) {
+    const { jobId } = await params;
+
+    // Get job from database
+    const job = await db.importJob.findUnique({
+        where: { id: jobId }
+    });
+
+    if (!job) {
+        return NextResponse.json(
+            { error: 'Job not found' },
+            { status: 404 }
+        );
+    }
+
+    // Get settings for cookies
+    const settings = await db.gamdlSettings.findUnique({
+        where: { id: 'singleton' }
+    });
+
+    if (!settings?.cookies) {
+        return NextResponse.json(
+            { error: 'Cookies not configured' },
+            { status: 400 }
+        );
+    }
+
+    // Create SSE stream
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream({
+        async start(controller) {
+            const sendEvent = (event: string, data: unknown) => {
+                controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
+            };
+
+            try {
+                // Update job status to downloading
+                await db.importJob.update({
+                    where: { id: jobId },
+                    data: { status: 'downloading' }
+                });
+
+                sendEvent('started', { jobId, status: 'downloading' });
+
+                // Call Python service for download
+                console.log('[DEBUG] Calling Python download service for job:', jobId);
+                console.log('[DEBUG] URL:', job.url);
+                console.log('[DEBUG] Service URL:', `${GAMDL_SERVICE_URL}/download`);
+
+                const downloadRes = await fetch(`${GAMDL_SERVICE_URL}/download`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        url: job.url,
+                        cookies: settings.cookies,
+                        output_path: settings.outputPath,
+                        song_codec: settings.songCodec,
+                        lyrics_format: settings.lyricsFormat,
+                        cover_size: settings.coverSize,
+                        save_cover: settings.saveCover,
+                        language: settings.language,
+                        overwrite: settings.overwrite
+                    })
+                });
+
+                console.log('[DEBUG] Download service response status:', downloadRes.status);
+
+                if (!downloadRes.ok) {
+                    const errText = await downloadRes.text();
+                    console.error('[DEBUG] Download service error:', errText);
+                    throw new Error(`Download service error: ${downloadRes.status} - ${errText}`);
+                }
+
+                // Stream SSE from Python service
+                const reader = downloadRes.body?.getReader();
+                if (!reader) {
+                    throw new Error('No response body from download service');
+                }
+
+                const decoder = new TextDecoder();
+                let buffer = '';
+                let tracksComplete = 0;
+                let totalTracks = 0;
+
+                console.log('[SSE] Starting to read SSE stream...');
+
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) {
+                        console.log('[SSE] Stream ended (done=true)');
+                        break;
+                    }
+
+                    const chunk = decoder.decode(value, { stream: true });
+                    console.log(`[SSE] Received chunk (${chunk.length} chars):`, chunk.substring(0, 100));
+                    buffer += chunk;
+                    const lines = buffer.split('\n');
+                    buffer = lines.pop() || ''; // Keep incomplete line in buffer
+
+                    let currentEventType = '';
+
+                    for (const line of lines) {
+                        if (line.startsWith('event:')) {
+                            currentEventType = line.substring(6).trim();
+                            console.log(`[SSE] Received event type: ${currentEventType}`);
+                            continue;
+                        }
+
+                        if (line.startsWith('data:')) {
+                            try {
+                                const data = JSON.parse(line.substring(5).trim());
+                                console.log(`[SSE] Received data for event '${currentEventType}':`, JSON.stringify(data).substring(0, 200));
+
+                                // Handle different event types based on currentEventType
+                                if (currentEventType === 'queue_ready' && data.total_tracks !== undefined) {
+                                    totalTracks = data.total_tracks;
+                                    await db.importJob.update({
+                                        where: { id: jobId },
+                                        data: { tracksTotal: totalTracks }
+                                    });
+                                    sendEvent('queue_ready', { totalTracks });
+                                }
+
+                                if (currentEventType === 'track_complete' && data.filePath && data.metadata) {
+                                    // Track completed - insert into library
+                                    const { albumId, artistId } = await insertTrackToLibrary(data as TrackCompleteEvent);
+                                    tracksComplete++;
+
+                                    await db.importJob.update({
+                                        where: { id: jobId },
+                                        data: {
+                                            tracksComplete,
+                                            progress: totalTracks > 0
+                                                ? Math.round((tracksComplete / totalTracks) * 100)
+                                                : 0,
+                                            // Store imported IDs for navigation (last one wins)
+                                            importedAlbumId: albumId,
+                                            importedArtistId: artistId
+                                        }
+                                    });
+
+                                    sendEvent('track_complete', {
+                                        current: tracksComplete,
+                                        total: totalTracks,
+                                        title: data.metadata.title,
+                                        artist: data.metadata.artist
+                                    });
+                                }
+
+                                if (currentEventType === 'complete' || data.status === 'success') {
+                                    await db.importJob.update({
+                                        where: { id: jobId },
+                                        data: { status: 'complete', progress: 100 }
+                                    });
+                                    sendEvent('complete', {
+                                        completed: tracksComplete,
+                                        total: totalTracks
+                                    });
+                                }
+
+                                if (currentEventType === 'track_starting' && data.percent !== undefined) {
+                                    sendEvent('progress', data);
+                                }
+
+                                if (currentEventType === 'error' && data.message) {
+                                    throw new Error(data.message);
+                                }
+
+                                // Reset event type after processing data
+                                currentEventType = '';
+                            } catch (parseError) {
+                                // Ignore parse errors for incomplete data, but rethrow actual errors
+                                if (parseError instanceof Error && parseError.message !== 'Unexpected end of JSON input') {
+                                    throw parseError;
+                                }
+                            }
+                        }
+                    }
+                }
+            } catch (error) {
+                const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+
+                await db.importJob.update({
+                    where: { id: jobId },
+                    data: { status: 'error', error: errorMessage }
+                });
+
+                sendEvent('error', { message: errorMessage });
+            } finally {
+                controller.close();
+            }
+        }
+    });
+
+    return new Response(stream, {
+        headers: {
+            'Content-Type': 'text/event-stream',
+            'Cache-Control': 'no-cache',
+            'Connection': 'keep-alive'
+        }
+    });
+}

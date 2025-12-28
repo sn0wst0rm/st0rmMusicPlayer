@@ -38,9 +38,22 @@ export async function GET(
         // Node stream to Web stream
         const readable = new ReadableStream({
             start(controller) {
-                file.on('data', (chunk) => controller.enqueue(chunk));
-                file.on('end', () => controller.close());
-                file.on('error', (err) => controller.error(err));
+                file.on('data', (chunk) => {
+                    try {
+                        controller.enqueue(chunk);
+                    } catch (e) {
+                        file.destroy();
+                    }
+                });
+                file.on('end', () => {
+                    try { controller.close(); } catch (e) { }
+                });
+                file.on('error', (err) => {
+                    try { controller.error(err); } catch (e) { }
+                });
+            },
+            cancel() {
+                file.destroy();
             }
         });
 
@@ -58,9 +71,22 @@ export async function GET(
 
         const readable = new ReadableStream({
             start(controller) {
-                file.on('data', (chunk) => controller.enqueue(chunk));
-                file.on('end', () => controller.close());
-                file.on('error', (err) => controller.error(err));
+                file.on('data', (chunk) => {
+                    try {
+                        controller.enqueue(chunk);
+                    } catch (e) {
+                        file.destroy();
+                    }
+                });
+                file.on('end', () => {
+                    try { controller.close(); } catch (e) { }
+                });
+                file.on('error', (err) => {
+                    try { controller.error(err); } catch (e) { }
+                });
+            },
+            cancel() {
+                file.destroy();
             }
         });
 
