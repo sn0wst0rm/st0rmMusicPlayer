@@ -13,19 +13,21 @@ interface PlaylistCoverProps {
     tracks: CoverTrack[]
     playlistName: string
     className?: string
+    coverPath?: string | null  // Custom cover path
+    artworkUrl?: string | null // Apple Music artwork URL
 }
 
 /**
- * Playlist cover mosaic component that displays up to 4 unique album covers
- * in an S-pattern: top-left → top-right → bottom-right → bottom-left
- * 
- * Pattern with 1 cover: fills all 4 quadrants
- * Pattern with 2 covers: cover1 top-left & top-right, cover2 bottom-right & bottom-left
- * Pattern with 3 covers: cover1 TL, cover2 TR, cover3 BR, cover3 BL
- * Pattern with 4+ covers: each quadrant gets a unique cover
+ * Playlist cover component that displays:
+ * 1. Custom cover image if coverPath is set
+ * 2. Apple Music artwork if artworkUrl is set
+ * 3. Mosaic of up to 4 unique album covers in an S-pattern
+ * 4. Gradient with music note for empty playlists
  */
-export function PlaylistCover({ tracks, playlistName, className }: PlaylistCoverProps) {
+export function PlaylistCover({ tracks, playlistName, className, coverPath, artworkUrl }: PlaylistCoverProps) {
     const [loadedImages, setLoadedImages] = React.useState<Set<string>>(new Set())
+    const [customCoverLoaded, setCustomCoverLoaded] = React.useState(false)
+    const [customCoverError, setCustomCoverError] = React.useState(false)
 
     // Get unique album IDs (first occurrence of each album)
     const uniqueAlbumTracks = React.useMemo(() => {
@@ -81,6 +83,34 @@ export function PlaylistCover({ tracks, playlistName, className }: PlaylistCover
         "bottom-0 right-0", // Bottom-right (2)
         "bottom-0 left-0",  // Bottom-left (3)
     ]
+
+    // Custom cover path - use full /api/playlist-cover endpoint
+    const customCoverUrl = coverPath ? `/api/playlist-cover/${encodeURIComponent(coverPath)}` : null
+
+    // Priority: Custom cover > Apple Music artwork > Mosaic
+    if ((customCoverUrl || artworkUrl) && !customCoverError) {
+        const imageUrl = customCoverUrl || artworkUrl
+        return (
+            <div className={cn(
+                "relative rounded-lg overflow-hidden shadow-2xl bg-gradient-to-br from-primary/30 to-primary/60",
+                className
+            )}>
+                {!customCoverLoaded && (
+                    <Skeleton className="absolute inset-0 w-full h-full" />
+                )}
+                <img
+                    src={imageUrl!}
+                    alt={playlistName}
+                    className={cn(
+                        "w-full h-full object-cover transition-opacity duration-300",
+                        customCoverLoaded ? "opacity-100" : "opacity-0"
+                    )}
+                    onLoad={() => setCustomCoverLoaded(true)}
+                    onError={() => setCustomCoverError(true)}
+                />
+            </div>
+        )
+    }
 
     if (uniqueAlbumTracks.length === 0) {
         // Empty playlist - show gradient with music note
@@ -141,6 +171,42 @@ export function PlaylistCover({ tracks, playlistName, className }: PlaylistCover
                     </div>
                 )
             })}
+        </div>
+    )
+}
+
+/**
+ * Mini playlist cover for sidebar - shows custom cover or placeholder icon
+ */
+export function PlaylistCoverMini({
+    coverPath,
+    artworkUrl
+}: {
+    coverPath?: string | null
+    artworkUrl?: string | null
+}) {
+    const [loaded, setLoaded] = React.useState(false)
+    const [error, setError] = React.useState(false)
+
+    const customCoverUrl = coverPath ? `/api/playlist-cover/${encodeURIComponent(coverPath)}` : null
+    const imageUrl = customCoverUrl || artworkUrl
+
+    if (!imageUrl || error) {
+        return null // Will fall back to icon in sidebar
+    }
+
+    return (
+        <div className="relative size-4 rounded overflow-hidden">
+            <img
+                src={imageUrl}
+                alt=""
+                className={cn(
+                    "w-full h-full object-cover transition-opacity",
+                    loaded ? "opacity-100" : "opacity-0"
+                )}
+                onLoad={() => setLoaded(true)}
+                onError={() => setError(true)}
+            />
         </div>
     )
 }
