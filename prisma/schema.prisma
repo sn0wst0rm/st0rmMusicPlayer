@@ -125,7 +125,6 @@ model PlaylistTrack {
     position   Int // Order in playlist (1-indexed)
     addedAt    DateTime @default(now())
 
-    @@unique([playlistId, trackId])
     @@index([playlistId, position])
 }
 
@@ -155,6 +154,8 @@ model ImportJob {
     type               String // song, album, playlist
     title              String
     artist             String?
+    description        String?
+    globalId           String? // Apple Music globalId for playlist (pl.u-xxx)
     artworkUrl         String?
     status             String // pending, downloading, processing, complete, error
     progress           Int      @default(0)

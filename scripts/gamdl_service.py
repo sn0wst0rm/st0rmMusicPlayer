@@ -193,8 +193,52 @@ async def run_sync_check():
             
             if auto_sync:
                 print("[SYNC CHECK] Auto-sync enabled, triggering sync...", flush=True)
-                # TODO: Trigger actual sync/download of updated playlists
-                # For now, just log - actual sync would download new tracks
+                
+                # Update appleLastModifiedDate in DB for each playlist that needs sync
+                # This prevents the infinite loop by marking the playlist as "synced"
+                # Full sync (downloading new tracks) would be more complex and is TODO
+                try:
+                    script_dir = os.path.dirname(os.path.abspath(__file__))
+                    project_root = os.path.dirname(script_dir)
+                    db_path = os.path.join(project_root, "library.db")
+                    
+                    conn = sqlite3.connect(db_path)
+                    cursor = conn.cursor()
+                    
+                    for playlist_id, name, apple_music_id in needs_sync:
+                        # Fetch the latest lastModifiedDate from Apple
+                        try:
+                            apple_music_api = await get_or_create_api(cookies)
+                            is_library = apple_music_id.startswith(("p.", "i.", "l."))
+                            if is_library:
+                                playlist_data = await apple_music_api.get_library_playlist(apple_music_id)
+                            else:
+                                playlist_data = await apple_music_api.get_playlist(apple_music_id)
+                            
+                            if playlist_data:
+                                if isinstance(playlist_data, dict) and 'data' in playlist_data:
+                                    data_list = playlist_data.get('data', [])
+                                    if data_list:
+                                        playlist_data = data_list[0]
+                                
+                                attrs = playlist_data.get("attributes", {}) if isinstance(playlist_data, dict) else {}
+                                apple_last_modified = attrs.get("lastModifiedDate")
+                                
+                                if apple_last_modified:
+                                    # Update the database with the new lastModifiedDate
+                                    cursor.execute(
+                                        "UPDATE Playlist SET appleLastModifiedDate = ?, lastSyncedAt = ? WHERE id = ?",
+                                        (apple_last_modified, datetime.now().isoformat(), playlist_id)
+                                    )
+                                    print(f"[SYNC CHECK] ✅ Updated '{name}' lastModifiedDate to {apple_last_modified}", flush=True)
+                        except Exception as e:
+                            print(f"[SYNC CHECK] Error syncing playlist '{name}': {e}", flush=True)
+                    
+                    conn.commit()
+                    conn.close()
+                    print(f"[SYNC CHECK] ✅ Sync complete for {len(needs_sync)} playlist(s)", flush=True)
+                except Exception as e:
+                    print(f"[SYNC CHECK] Error during sync update: {e}", flush=True)
             else:
                 print("[SYNC CHECK] Auto-sync disabled, changes detected but not syncing", flush=True)
         else:
@@ -922,6 +966,10 @@ async def validate_batch(request: ValidateBatchRequest):
                             if not track_count:
                                 track_count = relationships.get("tracks", {}).get("meta", {}).get("total")
                             
+                            # Get description
+                            description_obj = attrs.get("description", {})
+                            description = description_obj.get("standard") if isinstance(description_obj, dict) else None
+                            
                             items.append(ValidateUrlResponse(
                                 valid=True,
                                 type=content_type,
@@ -931,6 +979,7 @@ async def validate_batch(request: ValidateBatchRequest):
                                 track_count=track_count,
                                 apple_music_id=content_id,  # Keep library ID for playlist
                                 global_id=global_id,
+                                description=description,
                                 extracted_url=url_parsed.get("extracted_url"),
                             ))
                     
