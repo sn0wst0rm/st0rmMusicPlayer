@@ -29,6 +29,7 @@ import {
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { ImportSettings } from "./ImportSettings"
+import { toast } from "sonner"
 
 interface ValidationResult {
     valid: boolean
@@ -39,6 +40,8 @@ interface ValidationResult {
     track_count?: number
     apple_music_id?: string
     extracted_url?: string  // Clean URL extracted from input text
+    global_id?: string // Global playlist ID (pl.u-xxx)
+    description?: string
     error?: string
 }
 
@@ -56,11 +59,12 @@ interface ImportJob {
     error?: string
     importedAlbumId?: string
     importedArtistId?: string
+    importedPlaylistId?: string
     createdAt: string
 }
 
 export function ImportView() {
-    const { gamdlServiceOnline, setGamdlServiceOnline, setLibrary, setSelectedAlbum, library } = usePlayerStore()
+    const { gamdlServiceOnline, setGamdlServiceOnline, setLibrary, setSelectedAlbum, library, setPlaylists, navigateToPlaylist } = usePlayerStore()
 
     const [url, setUrl] = useState("")
     const [isValidating, setIsValidating] = useState(false)
@@ -186,7 +190,9 @@ export function ImportView() {
                     type: validationResult.type,
                     title: validationResult.title,
                     artist: validationResult.artist,
-                    artworkUrl: validationResult.artwork_url
+                    artworkUrl: validationResult.artwork_url,
+                    description: validationResult.description,
+                    globalId: validationResult.global_id
                 })
             })
 
@@ -206,6 +212,24 @@ export function ImportView() {
                 setDownloadProgress({ current: data.current, total: data.total })
             })
 
+            eventSource.addEventListener('already_exists', (e) => {
+                const data = JSON.parse(e.data)
+                console.log('Playlist already exists:', data.message)
+                // Mark as completed to prevent SSE error handler from firing
+                completed = true
+                // Show notification to user
+                toast.error('Playlist Already Imported', {
+                    description: data.message,
+                })
+                // Clean up state
+                eventSource.close()
+                setIsDownloading(false)
+                setDownloadProgress(null)
+                setUrl('')
+                setValidationResult(null)
+                fetchImportJobs()
+            })
+
             eventSource.addEventListener('complete', () => {
                 completed = true
                 eventSource.close()
@@ -214,8 +238,9 @@ export function ImportView() {
                 setUrl('')
                 setValidationResult(null)
                 fetchImportJobs()
-                // Refresh library
+                // Refresh library and playlists
                 refreshLibrary()
+                refreshPlaylists()
             })
 
             // SSE triggers 'error' event when connection closes (even normally after complete)
@@ -242,7 +267,19 @@ export function ImportView() {
                 setLibrary(data)
             }
         } catch (err) {
-            console.error('Failed to refresh library:', err)
+            console.error('Error refreshing library:', err)
+        }
+    }
+
+    const refreshPlaylists = async () => {
+        try {
+            const res = await fetch('/api/playlists')
+            if (res.ok) {
+                const data = await res.json()
+                setPlaylists(data)
+            }
+        } catch (err) {
+            console.error('Error refreshing playlists:', err)
         }
     }
 
@@ -268,7 +305,9 @@ export function ImportView() {
                         type: item.type,
                         title: item.title,
                         artist: item.artist,
-                        artworkUrl: item.artwork_url
+                        artworkUrl: item.artwork_url,
+                        description: item.description,
+                        globalId: item.global_id
                     })
                 })
 
@@ -558,10 +597,16 @@ export function ImportView() {
                                         )}
                                     </div>
                                     <div className="flex-1 min-w-0">
-                                        {/* Clickable title if album was imported */}
-                                        {job.status === 'complete' && job.importedAlbumId ? (
+                                        {/* Clickable title if album/playlist was imported */}
+                                        {job.status === 'complete' && (job.importedAlbumId || job.importedPlaylistId) ? (
                                             <button
                                                 onClick={() => {
+                                                    // For playlists, navigate to playlist view
+                                                    if (job.type === 'playlist' && job.importedPlaylistId) {
+                                                        navigateToPlaylist(job.importedPlaylistId)
+                                                        return
+                                                    }
+                                                    // For albums, find and navigate to album
                                                     for (const artist of library) {
                                                         const album = artist.albums.find(a => a.id === job.importedAlbumId)
                                                         if (album) {

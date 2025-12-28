@@ -6,6 +6,7 @@ import { ScrollArea } from "@/components/ui/scroll-area"
 import { Separator } from "@/components/ui/separator"
 import { Skeleton } from "@/components/ui/skeleton"
 import { AlbumCard } from "@/components/album-card"
+import { TrackContextMenu } from "@/components/ui/track-context-menu"
 import { Play } from "lucide-react"
 import { cn } from "@/lib/utils"
 
@@ -16,53 +17,61 @@ interface SearchViewProps {
 }
 
 // Extracted component to allow proper hook usage
-function SongRow({ song, allSongs, playTrack }: {
+function SongRow({ song, allSongs, playTrack, onGoToArtist, onGoToAlbum }: {
     song: Track
     allSongs: Track[]
     playTrack: (track: Track, queue: Track[]) => void
+    onGoToArtist?: () => void
+    onGoToAlbum?: () => void
 }) {
     const [isLoading, setIsLoading] = React.useState(true)
 
     return (
-        <div
-            className="group flex items-center gap-4 rounded-md py-2 pr-2 hover:bg-neutral-100/50 dark:hover:bg-neutral-800/50 transition-colors cursor-pointer"
-            onClick={() => playTrack(song, allSongs)}
+        <TrackContextMenu
+            track={song}
+            onGoToArtist={onGoToArtist}
+            onGoToAlbum={onGoToAlbum}
         >
-            <div className="relative flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-secondary overflow-hidden">
-                {isLoading && (
-                    <Skeleton className="absolute inset-0 w-full h-full bg-primary/10" />
-                )}
-                <img
-                    src={`/api/cover/${song.id}?size=small`}
-                    alt={song.album?.title}
-                    className={cn(
-                        "absolute inset-0 w-full h-full object-cover transition-opacity duration-300",
-                        isLoading ? "opacity-0" : "opacity-100"
+            <div
+                className="group flex items-center gap-4 rounded-md py-2 pr-2 hover:bg-neutral-100/50 dark:hover:bg-neutral-800/50 transition-colors cursor-pointer"
+                onClick={() => playTrack(song, allSongs)}
+            >
+                <div className="relative flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-secondary overflow-hidden">
+                    {isLoading && (
+                        <Skeleton className="absolute inset-0 w-full h-full bg-primary/10" />
                     )}
-                    onLoad={() => setIsLoading(false)}
-                    onError={(e) => {
-                        e.currentTarget.style.display = 'none'
-                    }}
-                />
-                <div className="absolute inset-0 bg-primary/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center z-10">
-                    <Play className="h-4 w-4 text-white fill-white" />
+                    <img
+                        src={`/api/cover/${song.id}?size=small`}
+                        alt={song.album?.title}
+                        className={cn(
+                            "absolute inset-0 w-full h-full object-cover transition-opacity duration-300",
+                            isLoading ? "opacity-0" : "opacity-100"
+                        )}
+                        onLoad={() => setIsLoading(false)}
+                        onError={(e) => {
+                            e.currentTarget.style.display = 'none'
+                        }}
+                    />
+                    <div className="absolute inset-0 bg-primary/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center z-10">
+                        <Play className="h-4 w-4 text-white fill-white" />
+                    </div>
+                </div>
+                <div className="flex flex-col gap-0.5 overflow-hidden">
+                    <span className="font-medium truncate">{song.title}</span>
+                    <span className="text-xs text-muted-foreground truncate">
+                        {song.artist?.name} • {song.album?.title}
+                    </span>
+                </div>
+                <div className="ml-auto text-xs text-muted-foreground">
+                    {formatDuration(song.duration)}
                 </div>
             </div>
-            <div className="flex flex-col gap-0.5 overflow-hidden">
-                <span className="font-medium truncate">{song.title}</span>
-                <span className="text-xs text-muted-foreground truncate">
-                    {song.artist?.name} • {song.album?.title}
-                </span>
-            </div>
-            <div className="ml-auto text-xs text-muted-foreground">
-                {formatDuration(song.duration)}
-            </div>
-        </div>
+        </TrackContextMenu>
     )
 }
 
 export function SearchView({ playTrack, playAlbum, onSelectAlbum }: SearchViewProps) {
-    const { searchQuery, library, setCurrentView } = usePlayerStore()
+    const { searchQuery, library, setCurrentView, navigateToArtist, setSelectedAlbum } = usePlayerStore()
 
     // Use the advanced search engine with fuzzy matching and relevance scoring
     const searchResults = React.useMemo(() => {
@@ -109,14 +118,36 @@ export function SearchView({ playTrack, playAlbum, onSelectAlbum }: SearchViewPr
                         <h2 className="text-xl font-semibold tracking-tight">Songs</h2>
                         <Separator />
                         <div className="grid gap-1">
-                            {searchResults.songs.map((song) => (
-                                <SongRow
-                                    key={song.id}
-                                    song={song}
-                                    allSongs={searchResults.songs}
-                                    playTrack={playTrack}
-                                />
-                            ))}
+                            {searchResults.songs.map((song) => {
+                                // Helper to navigate to album
+                                const handleGoToAlbum = () => {
+                                    if (song.albumId) {
+                                        for (const artist of library) {
+                                            const album = artist.albums.find(a => a.id === song.albumId)
+                                            if (album) {
+                                                setSelectedAlbum({
+                                                    id: album.id,
+                                                    title: album.title,
+                                                    tracks: album.tracks,
+                                                    artistName: artist.name
+                                                })
+                                                break
+                                            }
+                                        }
+                                    }
+                                }
+
+                                return (
+                                    <SongRow
+                                        key={song.id}
+                                        song={song}
+                                        allSongs={searchResults.songs}
+                                        playTrack={playTrack}
+                                        onGoToArtist={song.artist?.name ? () => navigateToArtist(song.artist!.name) : undefined}
+                                        onGoToAlbum={song.albumId ? handleGoToAlbum : undefined}
+                                    />
+                                )
+                            })}
                         </div>
                     </div>
                 )}

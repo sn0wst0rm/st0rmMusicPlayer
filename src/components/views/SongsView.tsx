@@ -3,6 +3,7 @@ import { RefObject, useState, useCallback, useEffect, useRef, useLayoutEffect } 
 import { Play, Clock, Pause, ListPlus, Plus } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { AudioWaveform } from "@/components/ui/audio-waveform"
+import { TrackContextMenu } from "@/components/ui/track-context-menu"
 import { cn } from "@/lib/utils"
 import { Track, usePlayerStore } from "@/lib/store"
 
@@ -376,98 +377,104 @@ export function SongsView({
                             const realIndex = index - 1
 
                             return (
-                                <div className="px-8 pr-6 w-full group">
-                                    <div
-                                        className={cn(
-                                            "py-2 text-sm cursor-pointer items-center rounded-sm transition-colors hover:bg-muted/50",
-                                            isPlaying && currentTrack?.id === track.id && "bg-muted/50"
-                                        )}
-                                        style={{ display: 'grid', gridTemplateColumns: getGridTemplate(false) }}
-                                        onClick={() => playTrack(track, songs)}
-                                    >
-                                        {/* Index column */}
-                                        <div className="px-2 font-medium tabular-nums text-muted-foreground flex items-center w-full relative border-r border-border/50 h-full">
-                                            <IndexCell
-                                                track={track}
-                                                realIndex={realIndex}
-                                                isPlaying={isPlaying}
-                                                currentTrack={currentTrack}
-                                                playTrack={playTrack}
-                                                songs={songs}
-                                            />
-                                        </div>
-
-                                        {/* Title column */}
-                                        <div className="flex flex-col min-w-0 px-4 border-r border-border/50 h-full justify-center">
-                                            <span className={cn("truncate font-medium", isPlaying && currentTrack?.id === track.id && "text-primary")}>{track.title}</span>
-                                            <span className="text-xs text-muted-foreground md:hidden truncate">{track.artist?.name}</span>
-                                        </div>
-
-                                        {/* Artist column */}
-                                        <div className="hidden md:flex text-muted-foreground min-w-0 px-4 border-r border-border/50 h-full items-center">
-                                            <span
-                                                className="truncate hover:underline hover:text-foreground cursor-pointer transition-colors"
-                                                onClick={(e) => {
-                                                    e.stopPropagation()
-                                                    if (onArtistClick && track.artist?.name) {
-                                                        onArtistClick(track.artist.name)
-                                                    }
-                                                }}
-                                            >
-                                                {track.artist?.name}
-                                            </span>
-                                        </div>
-
-                                        {/* Album column */}
-                                        <div className="hidden md:flex text-muted-foreground min-w-0 px-4 border-r border-border/50 h-full items-center">
-                                            <span
-                                                className="truncate hover:underline hover:text-foreground cursor-pointer transition-colors"
-                                                onClick={(e) => {
-                                                    e.stopPropagation()
-                                                    if (onSelectAlbum && track.albumId) {
-                                                        onSelectAlbum(track.albumId)
-                                                    }
-                                                }}
-                                            >
-                                                {track.album?.title}
-                                            </span>
-                                        </div>
-
-                                        {/* Duration column with queue actions */}
-                                        <div className="text-muted-foreground select-none h-full flex items-center justify-end gap-1">
-                                            {/* Queue actions - show on hover */}
-                                            <div className="flex items-center opacity-0 group-hover:opacity-100 transition-opacity">
-                                                <Button
-                                                    variant="ghost"
-                                                    size="icon"
-                                                    className="h-7 w-7 text-muted-foreground hover:text-foreground"
-                                                    title="Play Next"
-                                                    onClick={(e) => {
-                                                        e.stopPropagation()
-                                                        usePlayerStore.getState().playNext(track)
-                                                    }}
-                                                >
-                                                    <ListPlus className="h-4 w-4" />
-                                                </Button>
-                                                <Button
-                                                    variant="ghost"
-                                                    size="icon"
-                                                    className="h-7 w-7 text-muted-foreground hover:text-foreground"
-                                                    title="Add to Queue"
-                                                    onClick={(e) => {
-                                                        e.stopPropagation()
-                                                        usePlayerStore.getState().addToQueue(track)
-                                                    }}
-                                                >
-                                                    <Plus className="h-4 w-4" />
-                                                </Button>
+                                <TrackContextMenu
+                                    track={track}
+                                    onGoToArtist={track.artist?.name ? () => onArtistClick?.(track.artist!.name) : undefined}
+                                    onGoToAlbum={track.albumId ? () => onSelectAlbum?.(track.albumId!) : undefined}
+                                >
+                                    <div className="px-8 pr-6 w-full group">
+                                        <div
+                                            className={cn(
+                                                "py-2 text-sm cursor-pointer items-center rounded-sm transition-colors hover:bg-muted/50",
+                                                isPlaying && currentTrack?.id === track.id && "bg-muted/50"
+                                            )}
+                                            style={{ display: 'grid', gridTemplateColumns: getGridTemplate(false) }}
+                                            onClick={() => playTrack(track, songs)}
+                                        >
+                                            {/* Index column */}
+                                            <div className="px-2 font-medium tabular-nums text-muted-foreground flex items-center w-full relative border-r border-border/50 h-full">
+                                                <IndexCell
+                                                    track={track}
+                                                    realIndex={realIndex}
+                                                    isPlaying={isPlaying}
+                                                    currentTrack={currentTrack}
+                                                    playTrack={playTrack}
+                                                    songs={songs}
+                                                />
                                             </div>
-                                            <span className="font-variant-numeric tabular-nums text-sm pr-2">
-                                                {formatDuration(track.duration)}
-                                            </span>
+
+                                            {/* Title column */}
+                                            <div className="flex flex-col min-w-0 px-4 border-r border-border/50 h-full justify-center">
+                                                <span className={cn("truncate font-medium", isPlaying && currentTrack?.id === track.id && "text-primary")}>{track.title}</span>
+                                                <span className="text-xs text-muted-foreground md:hidden truncate">{track.artist?.name}</span>
+                                            </div>
+
+                                            {/* Artist column */}
+                                            <div className="hidden md:flex text-muted-foreground min-w-0 px-4 border-r border-border/50 h-full items-center">
+                                                <span
+                                                    className="truncate hover:underline hover:text-foreground cursor-pointer transition-colors"
+                                                    onClick={(e) => {
+                                                        e.stopPropagation()
+                                                        if (onArtistClick && track.artist?.name) {
+                                                            onArtistClick(track.artist.name)
+                                                        }
+                                                    }}
+                                                >
+                                                    {track.artist?.name}
+                                                </span>
+                                            </div>
+
+                                            {/* Album column */}
+                                            <div className="hidden md:flex text-muted-foreground min-w-0 px-4 border-r border-border/50 h-full items-center">
+                                                <span
+                                                    className="truncate hover:underline hover:text-foreground cursor-pointer transition-colors"
+                                                    onClick={(e) => {
+                                                        e.stopPropagation()
+                                                        if (onSelectAlbum && track.albumId) {
+                                                            onSelectAlbum(track.albumId)
+                                                        }
+                                                    }}
+                                                >
+                                                    {track.album?.title}
+                                                </span>
+                                            </div>
+
+                                            {/* Duration column with queue actions */}
+                                            <div className="text-muted-foreground select-none h-full flex items-center justify-end gap-1">
+                                                {/* Queue actions - show on hover */}
+                                                <div className="flex items-center opacity-0 group-hover:opacity-100 transition-opacity">
+                                                    <Button
+                                                        variant="ghost"
+                                                        size="icon"
+                                                        className="h-7 w-7 text-muted-foreground hover:text-foreground"
+                                                        title="Play Next"
+                                                        onClick={(e) => {
+                                                            e.stopPropagation()
+                                                            usePlayerStore.getState().playNext(track)
+                                                        }}
+                                                    >
+                                                        <ListPlus className="h-4 w-4" />
+                                                    </Button>
+                                                    <Button
+                                                        variant="ghost"
+                                                        size="icon"
+                                                        className="h-7 w-7 text-muted-foreground hover:text-foreground"
+                                                        title="Add to Queue"
+                                                        onClick={(e) => {
+                                                            e.stopPropagation()
+                                                            usePlayerStore.getState().addToQueue(track)
+                                                        }}
+                                                    >
+                                                        <Plus className="h-4 w-4" />
+                                                    </Button>
+                                                </div>
+                                                <span className="font-variant-numeric tabular-nums text-sm pr-2">
+                                                    {formatDuration(track.duration)}
+                                                </span>
+                                            </div>
                                         </div>
                                     </div>
-                                </div>
+                                </TrackContextMenu>
                             )
                         }}
                         onScroll={onScroll}

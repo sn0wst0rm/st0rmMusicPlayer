@@ -337,6 +337,7 @@ export function ImportSettings({ open, onOpenChange, onSettingsUpdate }: ImportS
                                             <SelectValue placeholder="Select interval" />
                                         </SelectTrigger>
                                         <SelectContent>
+                                            <SelectItem value="0.17">Every 10 seconds (testing)</SelectItem>
                                             <SelectItem value="15">Every 15 minutes</SelectItem>
                                             <SelectItem value="30">Every 30 minutes</SelectItem>
                                             <SelectItem value="60">Every hour</SelectItem>
