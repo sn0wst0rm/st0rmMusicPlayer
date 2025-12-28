@@ -55,3 +55,7 @@ src/generated
 
 # vscode
 *.code-workspace
+
+# Python virtual environment
+scripts/venv/
+scripts/__pycache__
