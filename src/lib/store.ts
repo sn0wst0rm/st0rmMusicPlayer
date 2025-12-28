@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
-import { Artist } from '@/types/music'
+import { Artist, Playlist } from '@/types/music'
 
 // UUID helper with fallback for older browsers (iOS Safari)
 function generateUUID(): string {
@@ -47,10 +47,16 @@ export interface SelectedAlbum {
     title: string
     tracks: Track[]
     artistName: string
+    // Extended metadata
+    description?: string
+    copyright?: string
+    genre?: string
+    releaseDate?: Date | string
+    recordLabel?: string
 }
 
 export interface NavigationState {
-    view: 'artists' | 'albums' | 'songs' | 'search'
+    view: 'artists' | 'albums' | 'songs' | 'search' | 'playlist' | 'import'
     scrollTop?: number
     scrollIndex?: number  // For Virtuoso views
 }
@@ -70,12 +76,15 @@ interface PlayerState {
     sidebarOpen: boolean
     queueOpen: boolean
     searchQuery: string
-    currentView: 'artists' | 'albums' | 'songs' | 'search' | 'album'
+    currentView: 'artists' | 'albums' | 'songs' | 'search' | 'album' | 'playlist' | 'import'
+    gamdlServiceOnline: boolean
     repeatMode: 'off' | 'all' | 'one'
     library: Artist[]
     selectedAlbum: SelectedAlbum | null
     previousNavigation: NavigationState | null
     targetArtist: string | null  // Artist name to scroll to
+    playlists: Playlist[]
+    selectedPlaylistId: string | null
 
     // Actions
     setIsPlaying: (isPlaying: boolean) => void
@@ -89,7 +98,8 @@ interface PlayerState {
     reorderQueue: (newQueue: QueueItem[]) => void
     toggleShuffle: () => void
     setSearchQuery: (query: string) => void
-    setCurrentView: (view: 'artists' | 'albums' | 'songs' | 'search' | 'album') => void
+    setCurrentView: (view: 'artists' | 'albums' | 'songs' | 'search' | 'album' | 'playlist' | 'import') => void
+    setGamdlServiceOnline: (online: boolean) => void
     toggleRepeat: () => void
     setQueueOpen: (open: boolean) => void
     toggleQueue: () => void
@@ -100,6 +110,9 @@ interface PlayerState {
     setTargetArtist: (artistName: string | null) => void
     navigateToArtist: (artistName: string) => void
     clearPlaybackHistory: () => void
+    setPlaylists: (playlists: Playlist[]) => void
+    setSelectedPlaylistId: (id: string | null) => void
+    navigateToPlaylist: (id: string) => void
 }
 
 // Helper to add track to playback history
@@ -134,6 +147,9 @@ export const usePlayerStore = create<PlayerState>()(
             selectedAlbum: null,
             previousNavigation: null,
             targetArtist: null,
+            playlists: [],
+            selectedPlaylistId: null,
+            gamdlServiceOnline: false,
 
             setIsPlaying: (isPlaying) => set({ isPlaying }),
             setVolume: (volume) => set({ volume }),
@@ -330,7 +346,11 @@ export const usePlayerStore = create<PlayerState>()(
             setPreviousNavigation: (nav) => set({ previousNavigation: nav }),
             setTargetArtist: (artistName) => set({ targetArtist: artistName }),
             navigateToArtist: (artistName) => set({ currentView: 'artists', targetArtist: artistName, selectedAlbum: null }),
-            clearPlaybackHistory: () => set({ playbackHistory: [] })
+            clearPlaybackHistory: () => set({ playbackHistory: [] }),
+            setPlaylists: (playlists) => set({ playlists }),
+            setSelectedPlaylistId: (id) => set({ selectedPlaylistId: id }),
+            setGamdlServiceOnline: (online) => set({ gamdlServiceOnline: online }),
+            navigateToPlaylist: (id) => set({ currentView: 'playlist', selectedPlaylistId: id, selectedAlbum: null })
         }),
         {
             name: 'storm-music-history',
