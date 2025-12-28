@@ -331,7 +331,24 @@ export function AppSidebar() {
                                             isActive={currentView === 'playlist' && selectedPlaylistId === playlist.id}
                                             onClick={() => navigateToPlaylist(playlist.id)}
                                         >
-                                            <ListMusic className="size-4" />
+                                            {playlist.coverPath || playlist.artworkUrl ? (
+                                                <div className="relative size-4 rounded overflow-hidden flex-shrink-0">
+                                                    <img
+                                                        src={playlist.coverPath
+                                                            ? `/api/playlist-cover/${encodeURIComponent(playlist.coverPath)}`
+                                                            : playlist.artworkUrl!
+                                                        }
+                                                        alt=""
+                                                        className="w-full h-full object-cover"
+                                                        onError={(e) => {
+                                                            // Fall back to icon on error
+                                                            e.currentTarget.parentElement!.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" class="size-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15V6"/><path d="M18.5 18a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5Z"/><path d="M12 12H3"/><path d="M16 6H3"/><path d="M12 18H3"/></svg>'
+                                                        }}
+                                                    />
+                                                </div>
+                                            ) : (
+                                                <ListMusic className="size-4" />
+                                            )}
                                             <span className="truncate">{playlist.name}</span>
                                         </SidebarMenuButton>
                                     </SidebarMenuItem>

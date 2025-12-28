@@ -8,6 +8,7 @@ import { ThemeProvider } from "@/components/theme-provider";
 import { ModeToggle } from "@/components/mode-toggle";
 import { ThemeColorManager } from "@/components/theme-color-manager";
 import { QueueSidebar } from "@/components/queue-sidebar";
+import { Toaster } from "@/components/ui/sonner";
 
 export const metadata: Metadata = {
   title: "st0rmMusic Player",
@@ -57,6 +58,7 @@ export default function RootLayout({
             <QueueSidebar />
           </SidebarProvider>
           <Player />
+          <Toaster />
         </ThemeProvider>
       </body>
     </html>
