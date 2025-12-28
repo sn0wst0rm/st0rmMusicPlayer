@@ -57,7 +57,7 @@ interface TrackCompleteEvent {
 }
 
 // Helper to upsert artist, album, track into database
-async function insertTrackToLibrary(event: TrackCompleteEvent): Promise<{ albumId: string; artistId: string }> {
+async function insertTrackToLibrary(event: TrackCompleteEvent): Promise<{ albumId: string; artistId: string; trackId: string }> {
     const { filePath, lyricsPath, coverPath, metadata } = event;
 
     // 1. Upsert Artist
@@ -133,7 +133,7 @@ async function insertTrackToLibrary(event: TrackCompleteEvent): Promise<{ albumI
     });
 
     // 3. Upsert Track
-    await db.track.upsert({
+    const track = await db.track.upsert({
         where: { filePath },
         create: {
             title: metadata.title || 'Unknown Track',
@@ -184,7 +184,7 @@ async function insertTrackToLibrary(event: TrackCompleteEvent): Promise<{ albumI
         }
     });
 
-    return { albumId: album.id, artistId: artist.id };
+    return { albumId: album.id, artistId: artist.id, trackId: track.id };
 }
 
 // GET stream download status via SSE
@@ -222,6 +222,8 @@ export async function GET(request: Request, { params }: RouteParams) {
             const sendEvent = (event: string, data: unknown) => {
                 controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
             };
+
+            let controllerClosed = false;
 
             try {
                 // Update job status to downloading
@@ -271,6 +273,103 @@ export async function GET(request: Request, { params }: RouteParams) {
                 let buffer = '';
                 let tracksComplete = 0;
                 let totalTracks = 0;
+                const importedTrackIds: string[] = []; // Track IDs for playlist linking
+                let playlistId: string | null = null;
+
+                // If this is a playlist import, create or find the playlist first
+                if (job.type === 'playlist') {
+                    let appleMusicPlaylistId: string | null = null;
+                    try {
+                        // Extract Apple Music playlist ID from URL
+                        // Supports: p.xxx (Library) and pl.xxx (Global)
+                        const urlMatch = job.url.match(/\/playlist\/(?:[^/]+\/)?((?:pl|p)\.[a-zA-Z0-9-]+)/);
+                        appleMusicPlaylistId = urlMatch ? urlMatch[1] : null;
+
+                        // Get globalId from job (passed from validation)
+                        const globalId = job.globalId;
+
+                        console.log(`[DEBUG] Extracted Playlist ID: ${appleMusicPlaylistId}, GlobalId: ${globalId} from ${job.url}`);
+
+                        // Check if playlist already exists by BOTH appleMusicId AND globalId
+                        // This handles the case where library (p.xxx) and catalog (pl.u-xxx) URLs are different for same playlist
+                        let existingPlaylist = null;
+
+                        if (appleMusicPlaylistId) {
+                            existingPlaylist = await db.playlist.findUnique({
+                                where: { appleMusicId: appleMusicPlaylistId }
+                            });
+                        }
+
+                        // If not found by appleMusicId, check by globalId
+                        if (!existingPlaylist && globalId) {
+                            existingPlaylist = await db.playlist.findUnique({
+                                where: { globalId: globalId }
+                            });
+                        }
+
+                        if (existingPlaylist) {
+                            console.log(`[DEBUG] Playlist already exists: ${existingPlaylist.id}`);
+                            // Playlist already exists - delete the job to avoid history clutter
+                            await db.importJob.delete({
+                                where: { id: jobId }
+                            });
+
+                            sendEvent('already_exists', {
+                                playlistId: existingPlaylist.id,
+                                playlistName: existingPlaylist.name,
+                                message: `Playlist "${existingPlaylist.name}" has already been imported`
+                            });
+                            sendEvent('complete', { completed: 0, total: 0, alreadyExists: true });
+                            controllerClosed = true;
+                            controller.close();
+                            return;
+                        }
+
+                        const playlist = await db.playlist.create({
+                            data: {
+                                name: job.title,
+                                description: job.description,
+                                appleMusicId: appleMusicPlaylistId,
+                                globalId: globalId, // Store globalId for cross-URL duplicate detection
+                                artworkUrl: job.artworkUrl,
+                                isSynced: true,
+                                lastSyncedAt: new Date(),
+                            }
+                        });
+                        playlistId = playlist.id;
+
+                        // Update job with playlist reference
+                        await db.importJob.update({
+                            where: { id: jobId },
+                            data: { importedPlaylistId: playlistId }
+                        });
+
+                        console.log(`[DEBUG] Created playlist: ${playlist.id} - ${playlist.name}`);
+                    } catch (err) {
+                        console.error('[ERROR] Failed to handle playlist creation:', err);
+
+                        // Attempt to recover: if creation failed (likely unique constraint), try to find it again
+                        if (appleMusicPlaylistId) {
+                            try {
+                                const recoveredPlaylist = await db.playlist.findUnique({
+                                    where: { appleMusicId: appleMusicPlaylistId }
+                                });
+
+                                if (recoveredPlaylist) {
+                                    console.log(`[DEBUG] Recovered playlist from error: ${recoveredPlaylist.id}`);
+                                    playlistId = recoveredPlaylist.id;
+
+                                    await db.importJob.update({
+                                        where: { id: jobId },
+                                        data: { importedPlaylistId: playlistId }
+                                    });
+                                }
+                            } catch (recoveryErr) {
+                                console.error('[ERROR] Failed to recover playlist:', recoveryErr);
+                            }
+                        }
+                    }
+                }
 
                 console.log('[SSE] Starting to read SSE stream...');
 
@@ -313,8 +412,20 @@ export async function GET(request: Request, { params }: RouteParams) {
 
                                 if (currentEventType === 'track_complete' && data.filePath && data.metadata) {
                                     // Track completed - insert into library
-                                    const { albumId, artistId } = await insertTrackToLibrary(data as TrackCompleteEvent);
+                                    const { albumId, artistId, trackId } = await insertTrackToLibrary(data as TrackCompleteEvent);
                                     tracksComplete++;
+
+                                    // If this is a playlist import, add track to playlist
+                                    if (playlistId && trackId) {
+                                        await db.playlistTrack.create({
+                                            data: {
+                                                playlistId,
+                                                trackId,
+                                                position: tracksComplete // Use order of download as position
+                                            }
+                                        });
+                                        console.log(`[DEBUG] Added track ${trackId} to playlist ${playlistId} at position ${tracksComplete}`);
+                                    }
 
                                     await db.importJob.update({
                                         where: { id: jobId },
@@ -377,7 +488,9 @@ export async function GET(request: Request, { params }: RouteParams) {
 
                 sendEvent('error', { message: errorMessage });
             } finally {
-                controller.close();
+                if (!controllerClosed) {
+                    controller.close();
+                }
             }
         }
     });

@@ -24,7 +24,7 @@ export async function POST(request: Request, { params }: RouteParams) {
         }
 
         const body = await request.json();
-        const { trackIds } = body;
+        const { trackIds, force = false } = body;
 
         if (!trackIds || !Array.isArray(trackIds) || trackIds.length === 0) {
             return NextResponse.json(
@@ -41,37 +41,50 @@ export async function POST(request: Request, { params }: RouteParams) {
 
         let nextPosition = (maxPosition._max.position ?? -1) + 1;
 
-        // Filter out tracks already in playlist
-        const existingTracks = await db.playlistTrack.findMany({
-            where: {
-                playlistId,
-                trackId: { in: trackIds }
-            },
-            select: { trackId: true }
-        });
+        let tracksToAdd = trackIds;
 
-        const existingTrackIds = new Set(existingTracks.map(t => t.trackId));
-        const newTrackIds = trackIds.filter((id: string) => !existingTrackIds.has(id));
-
-        if (newTrackIds.length === 0) {
-            return NextResponse.json({
-                message: 'All tracks are already in playlist',
-                added: 0
+        // Only filter duplicates if force is not set
+        if (!force) {
+            // Filter out tracks already in playlist
+            const existingTracks = await db.playlistTrack.findMany({
+                where: {
+                    playlistId,
+                    trackId: { in: trackIds }
+                },
+                select: { trackId: true }
             });
+
+            const existingTrackIds = new Set(existingTracks.map(t => t.trackId));
+            tracksToAdd = trackIds.filter((id: string) => !existingTrackIds.has(id));
+
+            if (tracksToAdd.length === 0) {
+                return NextResponse.json({
+                    message: 'All tracks are already in playlist',
+                    added: 0,
+                    playlistTrackIds: []
+                });
+            }
         }
 
-        // Add new tracks
-        await db.playlistTrack.createMany({
-            data: newTrackIds.map((trackId: string) => ({
-                playlistId,
-                trackId,
-                position: nextPosition++
-            }))
-        });
+        // Add tracks one by one to get their IDs
+        const createdTracks = await Promise.all(
+            tracksToAdd.map((trackId: string) =>
+                db.playlistTrack.create({
+                    data: {
+                        playlistId,
+                        trackId,
+                        position: nextPosition++
+                    }
+                })
+            )
+        );
+
+        const playlistTrackIds = createdTracks.map(t => t.id);
 
         return NextResponse.json({
             message: 'Tracks added successfully',
-            added: newTrackIds.length
+            added: tracksToAdd.length,
+            playlistTrackIds
         }, { status: 201 });
     } catch (error) {
         console.error('Error adding tracks to playlist:', error);

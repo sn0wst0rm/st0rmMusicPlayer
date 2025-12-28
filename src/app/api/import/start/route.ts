@@ -7,7 +7,7 @@ const GAMDL_SERVICE_URL = process.env.GAMDL_SERVICE_URL || 'http://127.0.0.1:510
 export async function POST(request: Request) {
     try {
         const body = await request.json();
-        const { url, type, title, artist, artworkUrl } = body;
+        const { url, type, title, artist, artworkUrl, description, globalId } = body;
 
         if (!url || typeof url !== 'string') {
             return NextResponse.json(
@@ -35,6 +35,8 @@ export async function POST(request: Request) {
                 type: type || 'unknown',
                 title: title || 'Unknown',
                 artist: artist || null,
+                description: description || null,
+                globalId: globalId || null,
                 artworkUrl: artworkUrl || null,
                 status: 'pending',
                 progress: 0

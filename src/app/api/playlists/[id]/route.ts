@@ -129,16 +129,16 @@ export async function DELETE(request: Request, { params }: RouteParams) {
     const { id } = await params;
 
     try {
-        // Check if playlist is synced (read-only)
+        // Check if playlist exists
         const existingPlaylist = await db.playlist.findUnique({
             where: { id },
             select: { isSynced: true }
         });
 
-        if (existingPlaylist?.isSynced) {
+        if (!existingPlaylist) {
             return NextResponse.json(
-                { error: 'Cannot delete a synced playlist. Unlink it from Apple Music first.' },
-                { status: 403 }
+                { error: 'Playlist not found' },
+                { status: 404 }
             );
         }
 
