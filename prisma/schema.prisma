@@ -8,41 +8,162 @@ datasource db {
 }
 
 model Artist {
-    id        String   @id @default(uuid())
-    name      String   @unique
-    createdAt DateTime @default(now())
-    updatedAt DateTime @updatedAt
-    albums    Album[]
-    tracks    Track[]
+    id           String   @id @default(uuid())
+    name         String   @unique
+    appleMusicId String?  @unique // Apple Music artist ID
+    sortName     String? // For proper alphabetical sorting
+    createdAt    DateTime @default(now())
+    updatedAt    DateTime @updatedAt
+    albums       Album[]
+    tracks       Track[]
 }
 
 model Album {
-    id              String   @id @default(uuid())
-    title           String
-    artistId        String
-    artist          Artist   @relation(fields: [artistId], references: [id])
-    coverPath       String? // Original/Legacy
-    coverSmallPath  String? // ~96px
-    coverMediumPath String? // ~512px
-    coverLargePath  String? // Original/Full
-    createdAt       DateTime @default(now())
-    updatedAt       DateTime @updatedAt
-    tracks          Track[]
+    id                  String    @id @default(uuid())
+    title               String
+    artistId            String
+    artist              Artist    @relation(fields: [artistId], references: [id])
+    coverSmallPath      String? // ~96px
+    coverMediumPath     String? // ~512px
+    coverLargePath      String? // Original/Full
+    // Metadata from gamdl
+    appleMusicId        String?   @unique // Apple Music album ID
+    genre               String? // Primary genre
+    releaseDate         DateTime? // Release date
+    copyright           String? // Copyright info
+    trackTotal          Int? // Total tracks in album
+    discTotal           Int? // Total discs
+    isCompilation       Boolean   @default(false)
+    sortTitle           String? // For proper alphabetical sorting
+    // Extended Apple Music metadata
+    description         String? // Editorial notes / description
+    recordLabel         String? // Record label name
+    upc                 String? // Universal Product Code
+    isSingle            Boolean   @default(false)
+    isMasteredForItunes Boolean   @default(false)
+    // Artwork colors for theming
+    artworkBgColor      String? // Background color (hex without #)
+    artworkTextColor1   String? // Primary text color
+    artworkTextColor2   String? // Secondary text color
+    artworkTextColor3   String? // Tertiary text color
+    artworkTextColor4   String? // Quaternary text color
+
+    createdAt DateTime @default(now())
+    updatedAt DateTime @updatedAt
+    tracks    Track[]
 
     @@unique([title, artistId])
 }
 
 model Track {
-    id          String   @id @default(uuid())
-    title       String
-    artistId    String
-    artist      Artist   @relation(fields: [artistId], references: [id])
-    albumId     String
-    album       Album    @relation(fields: [albumId], references: [id])
-    filePath    String   @unique // Original m4a file
-    mp3Path     String? // Converted mp3 file
-    duration    Float?
-    trackNumber Int?
-    createdAt   DateTime @default(now())
-    updatedAt   DateTime @updatedAt
+    id       String  @id @default(uuid())
+    title    String
+    artistId String
+    artist   Artist  @relation(fields: [artistId], references: [id])
+    albumId  String
+    album    Album   @relation(fields: [albumId], references: [id])
+    filePath String  @unique // Original m4a file
+    mp3Path  String? // Converted mp3 file
+    duration Float?
+
+    // Track position
+    trackNumber Int? // Position in album
+    trackTotal  Int? // Total tracks in album
+    discNumber  Int? // Disc number
+    discTotal   Int? // Total discs
+
+    // Metadata from gamdl
+    genre     String? // Genre name
+    composer  String? // Composer name
+    comment   String? // Track comments
+    copyright String? // Copyright info
+    rating    Int? // Rating (0-100, Apple uses 0/20/40/60/80/100)
+    isGapless Boolean? // Gapless playback flag
+
+    // Lyrics
+    lyricsPath String? // Path to synced .lrc file
+    lyrics     String? // Plain text lyrics (embedded)
+
+    // Apple Music identifiers
+    appleMusicId String? // Apple Music track ID (xid)
+    storefront   String? // Apple Music storefront (e.g., "us")
+
+    // Sort fields (for proper alphabetical sorting)
+    titleSort    String? // Sort title
+    artistSort   String? // Sort artist name
+    albumSort    String? // Sort album name
+    composerSort String? // Sort composer name
+
+    createdAt DateTime        @default(now())
+    updatedAt DateTime        @updatedAt
+    playlists PlaylistTrack[]
+}
+
+model Playlist {
+    id                    String          @id @default(uuid())
+    name                  String
+    description           String?
+    coverPath             String?
+    appleMusicId          String?         @unique // Apple Music playlist ID for sync (library ID: p.xxx)
+    globalId              String?         @unique // Apple Music global ID for cross-device sync (pl.u-xxx)
+    lastSyncedAt          DateTime? // When last synced from Apple Music
+    appleLastModifiedDate DateTime? // Apple Music's lastModifiedDate for sync comparison
+    artworkUrl            String? // Apple Music artwork URL
+    isSynced              Boolean         @default(false) // If true, playlist is read-only (synced from Apple Music)
+    m3u8Path              String? // Path to generated M3U8 file
+    createdAt             DateTime        @default(now())
+    updatedAt             DateTime        @updatedAt
+    tracks                PlaylistTrack[]
+}
+
+model PlaylistTrack {
+    id         String   @id @default(uuid())
+    playlistId String
+    playlist   Playlist @relation(fields: [playlistId], references: [id], onDelete: Cascade)
+    trackId    String
+    track      Track    @relation(fields: [trackId], references: [id], onDelete: Cascade)
+    position   Int // Order in playlist (1-indexed)
+    addedAt    DateTime @default(now())
+
+    @@unique([playlistId, trackId])
+    @@index([playlistId, position])
+}
+
+// gamdl configuration stored in database
+model GamdlSettings {
+    id               String    @id @default("singleton")
+    cookies          String? // Netscape format cookies content
+    outputPath       String    @default("./music")
+    songCodec        String    @default("aac-legacy")
+    lyricsFormat     String    @default("lrc")
+    coverSize        Int       @default(1200)
+    saveCover        Boolean   @default(true)
+    language         String    @default("en-US")
+    overwrite        Boolean   @default(false)
+    // Playlist sync settings
+    syncEnabled      Boolean   @default(false) // Enable automatic playlist sync
+    syncInterval     Int       @default(60) // Sync interval in minutes (15, 30, 60, 360, 1440)
+    autoSyncOnChange Boolean   @default(true) // Auto-sync when changes detected, or just notify
+    lastSyncCheck    DateTime? // When last sync check was performed
+    updatedAt        DateTime  @updatedAt
+}
+
+// Import job history for tracking downloads
+model ImportJob {
+    id                 String   @id @default(uuid())
+    url                String
+    type               String // song, album, playlist
+    title              String
+    artist             String?
+    artworkUrl         String?
+    status             String // pending, downloading, processing, complete, error
+    progress           Int      @default(0)
+    tracksTotal        Int?
+    tracksComplete     Int      @default(0)
+    error              String?
+    importedAlbumId    String? // Reference to imported Album for navigation
+    importedArtistId   String? // Reference to imported Artist for navigation
+    importedPlaylistId String? // Reference to imported Playlist for navigation
+    createdAt          DateTime @default(now())
+    updatedAt          DateTime @updatedAt
 }
