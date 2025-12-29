@@ -7,6 +7,7 @@ interface AudioWaveformProps {
     className?: string
     barCount?: number
     size?: number // Size in pixels (width and height will be equal)
+    color?: string // Custom CSS color for the bars (defaults to primary color)
 }
 
 /**
@@ -14,7 +15,7 @@ interface AudioWaveformProps {
  * Used to indicate a track is currently playing
  * The component is perfectly squared (width = height)
  */
-export function AudioWaveform({ className, barCount = 3, size = 16 }: AudioWaveformProps) {
+export function AudioWaveform({ className, barCount = 3, size = 16, color }: AudioWaveformProps) {
     // Generate pseudo-random but stable animation parameters for each bar
     // Using different prime-based durations and delays for organic feel
     const bars = React.useMemo(() => {
@@ -35,12 +36,13 @@ export function AudioWaveform({ className, barCount = 3, size = 16 }: AudioWavef
             {bars.map((bar, i) => (
                 <div
                     key={i}
-                    className="bg-primary rounded-sm animate-waveform-random"
+                    className={cn("rounded-sm animate-waveform-random", !color && "bg-primary")}
                     style={{
                         width: 3,
                         height: size, // Full height, animation will scale it
                         animationDuration: `${bar.duration}s`,
                         animationDelay: `${bar.delay}s`,
+                        ...(color && { backgroundColor: color }),
                     }}
                 />
             ))}
