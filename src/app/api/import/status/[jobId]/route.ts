@@ -449,13 +449,17 @@ export async function GET(request: Request, { params }: RouteParams) {
                                 }
 
                                 if (currentEventType === 'complete' || data.status === 'success') {
-                                    await db.importJob.update({
+                                    // Get the updated job with imported IDs
+                                    const updatedJob = await db.importJob.update({
                                         where: { id: jobId },
                                         data: { status: 'complete', progress: 100 }
                                     });
                                     sendEvent('complete', {
                                         completed: tracksComplete,
-                                        total: totalTracks
+                                        total: totalTracks,
+                                        importedAlbumId: updatedJob.importedAlbumId,
+                                        importedPlaylistId: updatedJob.importedPlaylistId || playlistId,
+                                        type: job.type
                                     });
                                 }
 

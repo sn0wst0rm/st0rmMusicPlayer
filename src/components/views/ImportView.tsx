@@ -29,6 +29,7 @@ import {
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { ImportSettings } from "./ImportSettings"
+import { SyncStatus } from "./SyncStatus"
 import { toast } from "sonner"
 
 interface ValidationResult {
@@ -230,11 +231,41 @@ export function ImportView() {
                 fetchImportJobs()
             })
 
-            eventSource.addEventListener('complete', () => {
+            eventSource.addEventListener('complete', (e) => {
                 completed = true
                 eventSource.close()
                 setIsDownloading(false)
                 setDownloadProgress(null)
+
+                // Parse completion data for navigation
+                let completeData: { importedAlbumId?: string; importedPlaylistId?: string; type?: string } = {}
+                try {
+                    completeData = JSON.parse(e.data)
+                } catch {
+                    // Ignore parse errors
+                }
+
+                // Show toast notification with action button
+                const importType = validationResult?.type || completeData.type || 'content'
+                const title = validationResult?.title || 'Content'
+
+                toast.success(`${title} imported successfully!`, {
+                    description: `Your ${importType} has been added to your library.`,
+                    action: {
+                        label: 'Open',
+                        onClick: () => {
+                            // Navigate based on type and imported IDs
+                            if (completeData.importedPlaylistId && importType === 'playlist') {
+                                navigateToPlaylist(completeData.importedPlaylistId)
+                            } else if (completeData.importedAlbumId) {
+                                // Refresh library to show updated albums
+                                // TODO: Add navigateToAlbum function to store
+                                refreshLibrary()
+                            }
+                        }
+                    }
+                })
+
                 setUrl('')
                 setValidationResult(null)
                 fetchImportJobs()
@@ -651,6 +682,11 @@ export function ImportView() {
                         </div>
                     </div>
                 )}
+
+                {/* Sync Status */}
+                <div className="mt-8">
+                    <SyncStatus />
+                </div>
 
                 {/* Bottom padding for player clearance */}
                 <div className="h-24" />
