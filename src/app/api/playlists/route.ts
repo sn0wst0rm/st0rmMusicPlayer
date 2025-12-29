@@ -29,6 +29,7 @@ export async function GET() {
         name: playlist.name,
         description: playlist.description,
         coverPath: playlist.coverPath,
+        artworkUrl: playlist.artworkUrl, // Apple Music artwork URL
         createdAt: playlist.createdAt,
         updatedAt: playlist.updatedAt,
         trackCount: playlist._count.tracks,
