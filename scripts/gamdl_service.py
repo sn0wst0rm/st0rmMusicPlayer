@@ -21,6 +21,8 @@ from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
+import websockets
+# Use websockets.serve directly to avoid deprecation warning
 
 # Global state
 active_downloads: dict = {}
@@ -32,6 +34,9 @@ _cached_api: dict = {
 }
 # Background scheduler for playlist sync
 _scheduler: Optional[AsyncIOScheduler] = None
+# WebSocket server and connected clients
+_ws_server = None
+_ws_clients: set = set()
 
 
 @asynccontextmanager
@@ -50,10 +55,20 @@ async def lifespan(app: FastAPI):
     _scheduler.start()
     print("📅 Background scheduler started", flush=True)
     
+    # Start WebSocket server
+    asyncio.create_task(start_websocket_server())
+    
     # Start the sync scheduler configuration task
     asyncio.create_task(configure_sync_scheduler())
     
     yield
+    
+    # Shutdown WebSocket server
+    global _ws_server
+    if _ws_server:
+        _ws_server.close()
+        await _ws_server.wait_closed()
+        print("🔌 WebSocket server stopped", flush=True)
     
     # Shutdown scheduler
     if _scheduler:
@@ -61,6 +76,316 @@ async def lifespan(app: FastAPI):
         print("📅 Background scheduler stopped", flush=True)
     
     print("🎵 gamdl service shutting down...", flush=True)
+
+
+async def start_websocket_server():
+    """Start the WebSocket server on port 5101."""
+    global _ws_server
+    
+    try:
+        _ws_server = await websockets.serve(websocket_handler, "0.0.0.0", 5101)
+        print("🔌 WebSocket server started on ws://0.0.0.0:5101", flush=True)
+    except Exception as e:
+        print(f"❌ Failed to start WebSocket server: {e}", flush=True)
+
+
+async def websocket_handler(websocket):
+    """Handle WebSocket connections from Next.js backend."""
+    global _ws_clients
+    
+    _ws_clients.add(websocket)
+    client_id = id(websocket)
+    print(f"[WS] Client {client_id} connected. Total clients: {len(_ws_clients)}", flush=True)
+    
+    try:
+        async for message in websocket:
+            try:
+                data = json.loads(message)
+                response = await handle_ws_message(data, websocket)
+                if response:
+                    await websocket.send(json.dumps(response))
+            except json.JSONDecodeError:
+                await websocket.send(json.dumps({"error": "Invalid JSON"}))
+            except Exception as e:
+                print(f"[WS] Error handling message: {e}", flush=True)
+                await websocket.send(json.dumps({"error": str(e)}))
+    except websockets.ConnectionClosed:
+        pass
+    finally:
+        _ws_clients.discard(websocket)
+        print(f"[WS] Client {client_id} disconnected. Total clients: {len(_ws_clients)}", flush=True)
+
+
+async def handle_ws_message(data: dict, websocket) -> Optional[dict]:
+    """Handle incoming WebSocket messages and route to appropriate handlers."""
+    msg_type = data.get("type")
+    request_id = data.get("requestId")
+    
+    if msg_type == "ping":
+        return {"type": "pong", "requestId": request_id}
+    
+    elif msg_type == "validate":
+        # Validate a URL
+        result = await ws_handle_validate(data)
+        return {"type": "validate_result", "requestId": request_id, "data": result}
+    
+    elif msg_type == "validate_batch":
+        # Validate multiple URLs
+        result = await ws_handle_validate_batch(data)
+        return {"type": "validate_batch_result", "requestId": request_id, "data": result}
+    
+    elif msg_type == "download":
+        # Start a download - progress will be sent via separate events
+        asyncio.create_task(ws_handle_download(data, websocket, request_id))
+        return {"type": "download_started", "requestId": request_id}
+    
+    elif msg_type == "sync_playlist":
+        # Sync a specific playlist
+        asyncio.create_task(ws_handle_sync_playlist(data, websocket, request_id))
+        return {"type": "sync_started", "requestId": request_id}
+    
+    elif msg_type == "get_playlist_tracks":
+        # Get tracks for a playlist from Apple Music
+        result = await ws_handle_get_playlist_tracks(data)
+        return {"type": "playlist_tracks", "requestId": request_id, "data": result}
+    
+    else:
+        return {"type": "error", "requestId": request_id, "error": f"Unknown message type: {msg_type}"}
+
+
+async def broadcast_ws_event(event_type: str, data: dict):
+    """Broadcast an event to all connected WebSocket clients."""
+    if not _ws_clients:
+        return
+    
+    message = json.dumps({"type": event_type, "data": data})
+    
+    disconnected = set()
+    for client in _ws_clients:
+        try:
+            await client.send(message)
+        except websockets.ConnectionClosed:
+            disconnected.add(client)
+    
+    _ws_clients.difference_update(disconnected)
+
+
+# ============ WebSocket Message Handlers ============
+
+async def ws_handle_validate(data: dict) -> dict:
+    """Handle URL validation via WebSocket."""
+    url = data.get("url")
+    cookies = data.get("cookies")
+    
+    if not url:
+        return {"valid": False, "error": "URL is required"}
+    
+    try:
+        # Use existing validation logic
+        url_info = parse_apple_music_url(url)
+        if not url_info.get("valid"):
+            return {"valid": False, "error": url_info.get("error", "Invalid URL")}
+        
+        if cookies:
+            api = await get_or_create_api(cookies)
+            metadata = await fetch_metadata_for_url(api, url_info)
+            if metadata:
+                return metadata
+        
+        return {
+            "valid": True,
+            "type": url_info.get("type"),
+            "apple_music_id": url_info.get("id") or url_info.get("track_id"),
+            "extracted_url": url_info.get("extracted_url"),
+        }
+    except Exception as e:
+        return {"valid": False, "error": str(e)}
+
+
+async def ws_handle_validate_batch(data: dict) -> dict:
+    """Handle batch URL validation via WebSocket."""
+    text = data.get("text")
+    cookies = data.get("cookies")
+    
+    if not text:
+        return {"items": [], "total_found": 0}
+    
+    # Use existing batch validation logic (simplified)
+    parsed_urls = find_all_apple_music_urls(text)
+    if not parsed_urls:
+        return {"items": [], "total_found": 0}
+    
+    items = []
+    for url_info in parsed_urls:
+        try:
+            item = {
+                "valid": True,
+                "type": url_info.get("type"),
+                "apple_music_id": url_info.get("id") or url_info.get("track_id"),
+                "extracted_url": url_info.get("extracted_url"),
+            }
+            
+            if cookies:
+                api = await get_or_create_api(cookies)
+                metadata = await fetch_metadata_for_url(api, url_info)
+                if metadata:
+                    item.update(metadata)
+            
+            items.append(item)
+        except Exception as e:
+            items.append({"valid": False, "error": str(e), "extracted_url": url_info.get("extracted_url")})
+    
+    return {"items": items, "total_found": len(items)}
+
+
+async def ws_handle_download(data: dict, websocket, request_id: str):
+    """Handle download request via WebSocket with progress streaming."""
+    url = data.get("url")
+    cookies = data.get("cookies")
+    output_dir = data.get("output_dir")
+    
+    try:
+        # Send progress updates via WebSocket instead of SSE
+        async def send_progress(event: str, event_data: dict):
+            await websocket.send(json.dumps({
+                "type": f"download_{event}",
+                "requestId": request_id,
+                "data": event_data
+            }))
+        
+        await send_progress("started", {"url": url})
+        
+        # Use existing download logic
+        result = await perform_download(url, cookies, output_dir, send_progress)
+        
+        await send_progress("complete", result)
+        
+    except Exception as e:
+        await websocket.send(json.dumps({
+            "type": "download_error",
+            "requestId": request_id,
+            "error": str(e)
+        }))
+
+
+async def ws_handle_sync_playlist(data: dict, websocket, request_id: str):
+    """Handle playlist sync request via WebSocket."""
+    playlist_id = data.get("playlistId")
+    apple_music_id = data.get("appleMusicId")
+    global_id = data.get("globalId")
+    cookies = data.get("cookies")
+    
+    try:
+        async def send_progress(event: str, event_data: dict):
+            await websocket.send(json.dumps({
+                "type": f"sync_{event}",
+                "requestId": request_id,
+                "data": event_data
+            }))
+        
+        await send_progress("started", {"playlistId": playlist_id})
+        
+        # Get current tracks from Apple Music
+        api = await get_or_create_api(cookies)
+        
+        # Prefer globalId for fetching
+        fetch_id = global_id or apple_music_id
+        is_library = fetch_id.startswith(("p.", "i.", "l.")) if fetch_id else False
+        
+        if is_library:
+            playlist_data = await api.get_library_playlist(fetch_id)
+        else:
+            playlist_data = await api.get_playlist(fetch_id)
+        
+        if not playlist_data:
+            await send_progress("error", {"error": "Could not fetch playlist from Apple Music"})
+            return
+        
+        if isinstance(playlist_data, dict) and 'data' in playlist_data:
+            playlist_data = playlist_data['data'][0] if playlist_data['data'] else None
+        
+        if not playlist_data:
+            await send_progress("error", {"error": "Empty playlist data from Apple Music"})
+            return
+        
+        attrs = playlist_data.get("attributes", {})
+        rels = playlist_data.get("relationships", {})
+        tracks_data = rels.get("tracks", {}).get("data", [])
+        
+        await send_progress("tracks_found", {
+            "playlistId": playlist_id,
+            "trackCount": len(tracks_data),
+            "playlistName": attrs.get("name"),
+            "lastModifiedDate": attrs.get("lastModifiedDate")
+        })
+        
+        # Return track list for Next.js to compare and sync
+        remote_tracks = []
+        for i, track in enumerate(tracks_data):
+            track_attrs = track.get("attributes", {})
+            remote_tracks.append({
+                "position": i,
+                "appleMusicId": track.get("id"),
+                "title": track_attrs.get("name"),
+                "artistName": track_attrs.get("artistName"),
+                "albumName": track_attrs.get("albumName"),
+                "durationMs": track_attrs.get("durationInMillis"),
+            })
+        
+        await send_progress("complete", {
+            "playlistId": playlist_id,
+            "remoteTracks": remote_tracks,
+            "lastModifiedDate": attrs.get("lastModifiedDate")
+        })
+        
+    except Exception as e:
+        await websocket.send(json.dumps({
+            "type": "sync_error",
+            "requestId": request_id,
+            "error": str(e)
+        }))
+
+
+async def ws_handle_get_playlist_tracks(data: dict) -> dict:
+    """Get playlist tracks from Apple Music API."""
+    apple_music_id = data.get("appleMusicId")
+    global_id = data.get("globalId")
+    cookies = data.get("cookies")
+    
+    try:
+        api = await get_or_create_api(cookies)
+        
+        fetch_id = global_id or apple_music_id
+        is_library = fetch_id.startswith(("p.", "i.", "l.")) if fetch_id else False
+        
+        if is_library:
+            playlist_data = await api.get_library_playlist(fetch_id)
+        else:
+            playlist_data = await api.get_playlist(fetch_id)
+        
+        if not playlist_data:
+            return {"error": "Could not fetch playlist"}
+        
+        if isinstance(playlist_data, dict) and 'data' in playlist_data:
+            playlist_data = playlist_data['data'][0] if playlist_data['data'] else None
+        
+        tracks_data = playlist_data.get("relationships", {}).get("tracks", {}).get("data", [])
+        
+        tracks = []
+        for i, track in enumerate(tracks_data):
+            attrs = track.get("attributes", {})
+            tracks.append({
+                "position": i,
+                "appleMusicId": track.get("id"),
+                "title": attrs.get("name"),
+                "artistName": attrs.get("artistName"),
+                "albumName": attrs.get("albumName"),
+            })
+        
+        return {"tracks": tracks, "count": len(tracks)}
+        
+    except Exception as e:
+        return {"error": str(e)}
 
 
 async def configure_sync_scheduler():
@@ -111,6 +436,261 @@ async def configure_sync_scheduler():
         print(f"[SYNC SCHEDULER] Error configuring scheduler: {e}", flush=True)
 
 
+async def download_tracks_for_sync(
+    track_ids: list[str],
+    playlist_id: str,
+    cookies: str,
+    cursor,
+    playlist_name: str = ""
+) -> int:
+    """Download tracks that are missing from library and add them to playlist.
+    
+    Returns the number of tracks successfully downloaded and added.
+    """
+    import uuid
+    import tempfile
+    from pathlib import Path
+    
+    if not track_ids:
+        return 0
+    
+    downloaded_count = 0
+    
+    try:
+        # Import gamdl components
+        from gamdl.api import AppleMusicApi, ItunesApi
+        from gamdl.downloader import (
+            AppleMusicDownloader,
+            AppleMusicBaseDownloader,
+            AppleMusicSongDownloader,
+            AppleMusicMusicVideoDownloader,
+            AppleMusicUploadedVideoDownloader,
+        )
+        from gamdl.interface import (
+            AppleMusicInterface,
+            AppleMusicSongInterface,
+            AppleMusicMusicVideoInterface,
+            AppleMusicUploadedVideoInterface,
+        )
+        from gamdl.interface.enums import SongCodec, SyncedLyricsFormat
+        from gamdl.downloader.enums import CoverFormat
+        
+        # Get settings for output path and codec
+        cursor.execute("SELECT outputPath, songCodec, lyricsFormat FROM GamdlSettings WHERE id = 'singleton'")
+        settings_row = cursor.fetchone()
+        
+        if not settings_row or not settings_row[0]:
+            print(f"[SYNC] No output path configured, skipping download", flush=True)
+            return 0
+        
+        output_path = Path(settings_row[0])
+        song_codec = settings_row[1] or "aac-legacy"
+        lyrics_format = settings_row[2] or "lrc"
+        
+        # Initialize API
+        apple_music_api = await get_or_create_api(cookies)
+        if not apple_music_api.active_subscription:
+            print(f"[SYNC] No active Apple Music subscription", flush=True)
+            return 0
+        
+        itunes_api = ItunesApi(
+            apple_music_api.storefront,
+            apple_music_api.language,
+        )
+        
+        # Set up downloaders
+        interface = AppleMusicInterface(apple_music_api, itunes_api)
+        song_interface = AppleMusicSongInterface(interface)
+        
+        base_downloader = AppleMusicBaseDownloader(
+            output_path=output_path,
+            temp_path=Path(tempfile.gettempdir()),
+            overwrite=False,
+            save_cover=True,
+            cover_size=1200,
+            cover_format=CoverFormat.JPG,
+        )
+        
+        codec_enum = SongCodec(song_codec)
+        lyrics_format_enum = SyncedLyricsFormat(lyrics_format) if lyrics_format != "none" else None
+        
+        song_downloader = AppleMusicSongDownloader(
+            base_downloader=base_downloader,
+            interface=song_interface,
+            codec=codec_enum,
+            synced_lyrics_format=lyrics_format_enum if lyrics_format_enum else SyncedLyricsFormat.LRC,
+            no_synced_lyrics=(lyrics_format == "none"),
+        )
+        
+        music_video_interface = AppleMusicMusicVideoInterface(interface)
+        uploaded_video_interface = AppleMusicUploadedVideoInterface(interface)
+        
+        music_video_downloader = AppleMusicMusicVideoDownloader(
+            base_downloader=base_downloader,
+            interface=music_video_interface,
+        )
+        
+        uploaded_video_downloader = AppleMusicUploadedVideoDownloader(
+            base_downloader=base_downloader,
+            interface=uploaded_video_interface,
+        )
+        
+        downloader = AppleMusicDownloader(
+            interface=interface,
+            base_downloader=base_downloader,
+            song_downloader=song_downloader,
+            music_video_downloader=music_video_downloader,
+            uploaded_video_downloader=uploaded_video_downloader,
+        )
+        
+        # Download each missing track
+        for track_id in track_ids:
+            try:
+                # Build song URL (song IDs are numeric)
+                if track_id.startswith("i."):
+                    # Library track - need to get catalog ID
+                    continue  # Skip library-only tracks for now
+                
+                song_url = f"https://music.apple.com/us/song/{track_id}"
+                
+                url_info = downloader.get_url_info(song_url)
+                if not url_info:
+                    print(f"[SYNC] Could not parse URL for track {track_id}", flush=True)
+                    continue
+                
+                download_queue = await downloader.get_download_queue(url_info)
+                if not download_queue:
+                    print(f"[SYNC] No downloadable content for track {track_id}", flush=True)
+                    continue
+                
+                # Download the track
+                for item in download_queue:
+                    try:
+                        final_path = await downloader.download(item)
+                        if final_path:
+                            print(f"[SYNC] Downloaded track to: {final_path}", flush=True)
+                            
+                            # Import to library using mutagen to get metadata
+                            import mutagen
+                            from mutagen.mp4 import MP4
+                            from mutagen.flac import FLAC
+                            
+                            audio = mutagen.File(final_path)
+                            duration = int(audio.info.length * 1000) if audio and audio.info else 0
+                            
+                            # Get metadata
+                            title = "Unknown"
+                            artist_name = "Unknown Artist"
+                            album_name = "Unknown Album"
+                            
+                            if isinstance(audio, MP4):
+                                title = audio.tags.get("©nam", [title])[0] if audio.tags else title
+                                artist_name = audio.tags.get("©ART", [artist_name])[0] if audio.tags else artist_name
+                                album_name = audio.tags.get("©alb", [album_name])[0] if audio.tags else album_name
+                            
+                            # Find or create artist
+                            cursor.execute("SELECT id FROM Artist WHERE name = ?", (artist_name,))
+                            artist_row = cursor.fetchone()
+                            if artist_row:
+                                artist_id = artist_row[0]
+                            else:
+                                artist_id = str(uuid.uuid4())
+                                cursor.execute("INSERT INTO Artist (id, name) VALUES (?, ?)", (artist_id, artist_name))
+                            
+                            # Find or create album
+                            cursor.execute("SELECT id FROM Album WHERE title = ? AND artistId = ?", (album_name, artist_id))
+                            album_row = cursor.fetchone()
+                            if album_row:
+                                album_id = album_row[0]
+                            else:
+                                album_id = str(uuid.uuid4())
+                                cursor.execute(
+                                    "INSERT INTO Album (id, title, artistId) VALUES (?, ?, ?)",
+                                    (album_id, album_name, artist_id)
+                                )
+                            
+                            # Create track
+                            new_track_id = str(uuid.uuid4())
+                            cursor.execute(
+                                """INSERT INTO Track (id, title, filePath, duration, albumId, appleMusicId, trackNumber) 
+                                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                                (new_track_id, title, str(final_path), duration, album_id, track_id, 1)
+                            )
+                            
+                            # Add to playlist
+                            cursor.execute("SELECT MAX(position) FROM PlaylistTrack WHERE playlistId = ?", (playlist_id,))
+                            max_pos = cursor.fetchone()[0] or 0
+                            
+                            cursor.execute(
+                                "INSERT INTO PlaylistTrack (id, playlistId, trackId, position) VALUES (?, ?, ?, ?)",
+                                (str(uuid.uuid4()), playlist_id, new_track_id, max_pos + 1)
+                            )
+                            
+                            downloaded_count += 1
+                            print(f"[SYNC] ✅ Added '{title}' to playlist '{playlist_name}'", flush=True)
+                            
+                    except Exception as item_err:
+                        error_msg = str(item_err)
+                        # Handle "file already exists" - the track is on disk but maybe not in DB with this ID
+                        if "already exists at path:" in error_msg:
+                            # Extract path from error message
+                            try:
+                                existing_path = error_msg.split("already exists at path:")[1].strip()
+                                print(f"[SYNC] Track already exists at: {existing_path}", flush=True)
+                                
+                                # Find track in our library by file path
+                                cursor.execute("SELECT id FROM Track WHERE filePath = ?", (existing_path,))
+                                existing_track = cursor.fetchone()
+                                
+                                if existing_track:
+                                    # Track found in library! Add to playlist
+                                    existing_track_id = existing_track[0]
+                                    
+                                    # Check if already in this playlist
+                                    cursor.execute(
+                                        "SELECT id FROM PlaylistTrack WHERE playlistId = ? AND trackId = ?",
+                                        (playlist_id, existing_track_id)
+                                    )
+                                    if not cursor.fetchone():
+                                        # Add to playlist
+                                        cursor.execute("SELECT MAX(position) FROM PlaylistTrack WHERE playlistId = ?", (playlist_id,))
+                                        max_pos = cursor.fetchone()[0] or 0
+                                        
+                                        cursor.execute(
+                                            "INSERT INTO PlaylistTrack (id, playlistId, trackId, position) VALUES (?, ?, ?, ?)",
+                                            (str(uuid.uuid4()), playlist_id, existing_track_id, max_pos + 1)
+                                        )
+                                        
+                                        # Also update the track's appleMusicId if it's different
+                                        cursor.execute(
+                                            "UPDATE Track SET appleMusicId = ? WHERE id = ? AND (appleMusicId IS NULL OR appleMusicId != ?)",
+                                            (track_id, existing_track_id, track_id)
+                                        )
+                                        
+                                        downloaded_count += 1
+                                        print(f"[SYNC] ✅ Added existing track to playlist '{playlist_name}'", flush=True)
+                                    else:
+                                        print(f"[SYNC] Track already in playlist", flush=True)
+                                else:
+                                    print(f"[SYNC] Track file exists but not in library DB", flush=True)
+                            except Exception as parse_err:
+                                print(f"[SYNC] Could not parse existing path: {parse_err}", flush=True)
+                        else:
+                            print(f"[SYNC] Error downloading item: {item_err}", flush=True)
+                        
+            except Exception as track_err:
+                print(f"[SYNC] Error downloading track {track_id}: {track_err}", flush=True)
+                
+    except ImportError as e:
+        print(f"[SYNC] gamdl import error: {e}", flush=True)
+    except Exception as e:
+        print(f"[SYNC] Download error: {e}", flush=True)
+        import traceback
+        traceback.print_exc()
+    
+    return downloaded_count
+
+
 async def run_sync_check():
     """Background task to check all synced playlists for updates."""
     import sqlite3
@@ -139,25 +719,55 @@ async def run_sync_check():
         
         cookies, _, auto_sync = settings
         
-        # Get all synced playlists
-        cursor.execute("SELECT id, name, appleMusicId, appleLastModifiedDate FROM Playlist WHERE isSynced = 1 AND appleMusicId IS NOT NULL")
+        # Get all synced playlists with their local track count
+        cursor.execute("""
+            SELECT p.id, p.name, p.appleMusicId, p.appleLastModifiedDate, 
+                   (SELECT COUNT(*) FROM PlaylistTrack pt WHERE pt.playlistId = p.id) as trackCount
+            FROM Playlist p 
+            WHERE p.isSynced = 1 AND p.appleMusicId IS NOT NULL
+        """)
         playlists = cursor.fetchall()
         
         # Update lastSyncCheck timestamp
         cursor.execute("UPDATE GamdlSettings SET lastSyncCheck = ? WHERE id = 'singleton'", (datetime.now().isoformat(),))
         conn.commit()
-        conn.close()
+        # Don't close - we need connection for the rest of sync check
         
         if not playlists:
             print("[SYNC CHECK] No synced playlists to check", flush=True)
+            conn.close()
             return
         
         print(f"[SYNC CHECK] Checking {len(playlists)} synced playlists...", flush=True)
         
+        # Get local track IDs for all playlists in one query for efficiency
+        cursor.execute("""
+            SELECT pt.playlistId, t.appleMusicId, pt.position
+            FROM PlaylistTrack pt 
+            JOIN Track t ON pt.trackId = t.id 
+            WHERE pt.playlistId IN (SELECT id FROM Playlist WHERE isSynced = 1)
+            ORDER BY pt.playlistId, pt.position
+        """)
+        local_tracks_all = cursor.fetchall()
+        
+        # Group by playlist
+        local_playlist_tracks = {}
+        for playlist_id, apple_id, position in local_tracks_all:
+            if playlist_id not in local_playlist_tracks:
+                local_playlist_tracks[playlist_id] = []
+            local_playlist_tracks[playlist_id].append((apple_id, position))
+        
+        # Also fetch local playlist name, description, and artwork URL
+        cursor.execute("SELECT id, name, description, artworkUrl FROM Playlist WHERE isSynced = 1")
+        local_metadata = {row[0]: (row[1], row[2], row[3]) for row in cursor.fetchall()}
+        
+        # Don't close connection yet - we may need it for auto_sync
+        
         needs_sync = []
-        for playlist_id, name, apple_music_id, local_modified in playlists:
+        sync_reasons = {}  # Track why each playlist needs sync
+        
+        for playlist_id, name, apple_music_id, local_modified, local_track_count in playlists:
             try:
-                # Check with Apple Music
                 apple_music_api = await get_or_create_api(cookies)
                 
                 is_library = apple_music_id.startswith(("p.", "i.", "l."))
@@ -166,25 +776,103 @@ async def run_sync_check():
                 else:
                     playlist_data = await apple_music_api.get_playlist(apple_music_id)
                 
-                if playlist_data:
-                    if isinstance(playlist_data, dict) and 'data' in playlist_data:
-                        data_list = playlist_data.get('data', [])
-                        if data_list:
-                            playlist_data = data_list[0]
+                if not playlist_data:
+                    continue
+                
+                if isinstance(playlist_data, dict) and 'data' in playlist_data:
+                    data_list = playlist_data.get('data', [])
+                    if data_list:
+                        playlist_data = data_list[0]
+                
+                attrs = playlist_data.get("attributes", {}) if isinstance(playlist_data, dict) else {}
+                rels = playlist_data.get("relationships", {}) if isinstance(playlist_data, dict) else {}
+                
+                # Get remote track IDs in order
+                tracks_data = rels.get("tracks", {}).get("data", [])
+                remote_track_ids = [t.get("id") for t in tracks_data if t.get("id")]
+                
+                # Get local track IDs in order
+                local_tracks = local_playlist_tracks.get(playlist_id, [])
+                local_track_ids = [t[0] for t in sorted(local_tracks, key=lambda x: x[1]) if t[0]]
+                
+                # Check how many remote tracks exist in our library at all
+                library_track_ids = set()
+                if remote_track_ids:
+                    cursor.execute(
+                        "SELECT appleMusicId FROM Track WHERE appleMusicId IN ({})".format(
+                            ','.join('?' * len(remote_track_ids))
+                        ),
+                        remote_track_ids
+                    )
+                    library_track_ids = set(row[0] for row in cursor.fetchall())
+                
+                # Filter remote tracks to only those in library - these are the ones we can sync
+                syncable_remote_ids = [t for t in remote_track_ids if t in library_track_ids]
+                pending_download_ids = [t for t in remote_track_ids if t not in library_track_ids]
+                
+                # Debug: show comparison
+                print(f"[SYNC DEBUG] '{name}': remote={len(remote_track_ids)}, in library={len(syncable_remote_ids)}, in playlist={len(local_track_ids)}, pending_dl={len(pending_download_ids)}", flush=True)
+                
+                # Log the actual IDs to diagnose mismatches
+                if pending_download_ids:
+                    print(f"[SYNC DEBUG] '{name}' pending_download IDs: {pending_download_ids}", flush=True)
+                    print(f"[SYNC DEBUG] '{name}' remote IDs: {remote_track_ids}", flush=True)
+                    print(f"[SYNC DEBUG] '{name}' library matched IDs: {list(library_track_ids)}", flush=True)
+                
+                if syncable_remote_ids != local_track_ids:
+                    print(f"[SYNC DEBUG] '{name}' syncable_remote: {syncable_remote_ids[:3]}...", flush=True)
+                    print(f"[SYNC DEBUG] '{name}' local_playlist: {local_track_ids[:3]}...", flush=True)
+                
+                # IMPORTANT: Also trigger sync if there are pending downloads!
+                # We need to download these tracks even if syncable tracks match local
+                has_pending_downloads = len(pending_download_ids) > 0
+                
+                # Compare only syncable tracks vs local tracks
+                tracks_differ = syncable_remote_ids != local_track_ids or has_pending_downloads
+                
+                # Compare name and description
+                remote_name = attrs.get("name", "")
+                remote_desc = attrs.get("description", {})
+                if isinstance(remote_desc, dict):
+                    remote_desc = remote_desc.get("standard", "")
+                
+                # Get remote artwork URL
+                artwork = attrs.get("artwork", {})
+                remote_artwork_url = artwork.get("url", "").replace("{w}", "1200").replace("{h}", "1200") if artwork else ""
+                
+                local_name, local_desc, local_artwork_url = local_metadata.get(playlist_id, ("", "", ""))
+                name_differs = remote_name != local_name
+                desc_differs = (remote_desc or "") != (local_desc or "")
+                artwork_differs = (remote_artwork_url or "") != (local_artwork_url or "")
+                
+                reasons = []
+                if tracks_differ:
+                    if len(syncable_remote_ids) != len(local_track_ids):
+                        reasons.append(f"track count ({len(syncable_remote_ids)} vs {len(local_track_ids)})")
+                    else:
+                        reasons.append("track order/content")
+                if name_differs:
+                    reasons.append(f"name ('{remote_name}' vs '{local_name}')")
+                if desc_differs:
+                    reasons.append("description")
+                if artwork_differs:
+                    reasons.append("artwork")
+                
+                if reasons:
+                    print(f"[SYNC DEBUG] '{name}' needs sync: {', '.join(reasons)}", flush=True)
+                    needs_sync.append((playlist_id, name, apple_music_id))
+                    sync_reasons[playlist_id] = {
+                        "tracks_differ": tracks_differ,
+                        "name_differs": name_differs,
+                        "desc_differs": desc_differs,
+                        "artwork_differs": artwork_differs,
+                        "remote_name": remote_name,
+                        "remote_desc": remote_desc,
+                        "remote_artwork_url": remote_artwork_url
+                    }
+                else:
+                    print(f"[SYNC DEBUG] '{name}' up to date", flush=True)
                     
-                    attrs = playlist_data.get("attributes", {}) if isinstance(playlist_data, dict) else {}
-                    apple_last_modified = attrs.get("lastModifiedDate")
-                    
-                    if apple_last_modified:
-                        from dateutil import parser
-                        apple_date = parser.isoparse(apple_last_modified)
-                        
-                        if local_modified:
-                            local_date = parser.isoparse(local_modified)
-                            if apple_date > local_date:
-                                needs_sync.append((playlist_id, name, apple_music_id))
-                        else:
-                            needs_sync.append((playlist_id, name, apple_music_id))
             except Exception as e:
                 print(f"[SYNC CHECK] Error checking playlist {name}: {e}", flush=True)
         
@@ -194,9 +882,6 @@ async def run_sync_check():
             if auto_sync:
                 print("[SYNC CHECK] Auto-sync enabled, triggering sync...", flush=True)
                 
-                # Update appleLastModifiedDate in DB for each playlist that needs sync
-                # This prevents the infinite loop by marking the playlist as "synced"
-                # Full sync (downloading new tracks) would be more complex and is TODO
                 try:
                     script_dir = os.path.dirname(os.path.abspath(__file__))
                     project_root = os.path.dirname(script_dir)
@@ -206,7 +891,6 @@ async def run_sync_check():
                     cursor = conn.cursor()
                     
                     for playlist_id, name, apple_music_id in needs_sync:
-                        # Fetch the latest lastModifiedDate from Apple
                         try:
                             apple_music_api = await get_or_create_api(cookies)
                             is_library = apple_music_id.startswith(("p.", "i.", "l."))
@@ -215,34 +899,158 @@ async def run_sync_check():
                             else:
                                 playlist_data = await apple_music_api.get_playlist(apple_music_id)
                             
-                            if playlist_data:
-                                if isinstance(playlist_data, dict) and 'data' in playlist_data:
-                                    data_list = playlist_data.get('data', [])
-                                    if data_list:
-                                        playlist_data = data_list[0]
+                            if not playlist_data:
+                                print(f"[SYNC CHECK] Could not fetch '{name}' from Apple Music", flush=True)
+                                continue
+                            
+                            if isinstance(playlist_data, dict) and 'data' in playlist_data:
+                                data_list = playlist_data.get('data', [])
+                                if data_list:
+                                    playlist_data = data_list[0]
+                            
+                            attrs = playlist_data.get("attributes", {}) if isinstance(playlist_data, dict) else {}
+                            rels = playlist_data.get("relationships", {}) if isinstance(playlist_data, dict) else {}
+                            
+                            # Get remote tracks with their Apple Music IDs
+                            remote_tracks = rels.get("tracks", {}).get("data", [])
+                            remote_track_ids = set()
+                            for track in remote_tracks:
+                                track_id = track.get("id")
+                                if track_id:
+                                    remote_track_ids.add(track_id)
+                            
+                            # Get local tracks with their Apple Music IDs
+                            cursor.execute("""
+                                SELECT pt.id, t.appleMusicId, pt.position 
+                                FROM PlaylistTrack pt 
+                                JOIN Track t ON pt.trackId = t.id 
+                                WHERE pt.playlistId = ?
+                            """, (playlist_id,))
+                            local_tracks = cursor.fetchall()
+                            local_track_map = {row[1]: row[0] for row in local_tracks if row[1]}  # appleMusicId -> playlistTrack.id
+                            local_track_ids = set(local_track_map.keys())
+                            
+                            # Find tracks to remove (in local but not in remote)
+                            tracks_to_remove = local_track_ids - remote_track_ids
+                            
+                            # Find tracks to add (in remote but not in local)
+                            tracks_to_add = remote_track_ids - local_track_ids
+                            
+                            removed_count = 0
+                            if tracks_to_remove:
+                                for track_id in tracks_to_remove:
+                                    pt_id = local_track_map.get(track_id)
+                                    if pt_id:
+                                        cursor.execute("DELETE FROM PlaylistTrack WHERE id = ?", (pt_id,))
+                                        removed_count += 1
+                                print(f"[SYNC CHECK] Removed {removed_count} tracks from '{name}'", flush=True)
+                            
+                            added_count = 0
+                            if tracks_to_add:
+                                # For tracks we need to add, check if they exist in library
+                                for remote_track in remote_tracks:
+                                    track_id = remote_track.get("id")
+                                    if track_id in tracks_to_add:
+                                        # Check if this track exists in our library
+                                        cursor.execute("SELECT id FROM Track WHERE appleMusicId = ?", (track_id,))
+                                        existing = cursor.fetchone()
+                                        if existing:
+                                            # Get max position
+                                            cursor.execute("SELECT MAX(position) FROM PlaylistTrack WHERE playlistId = ?", (playlist_id,))
+                                            max_pos = cursor.fetchone()[0] or 0
+                                            # Add to playlist
+                                            import uuid
+                                            cursor.execute(
+                                                "INSERT INTO PlaylistTrack (id, playlistId, trackId, position) VALUES (?, ?, ?, ?)",
+                                                (str(uuid.uuid4()), playlist_id, existing[0], max_pos + 1)
+                                            )
+                                            added_count += 1
+                                if added_count > 0:
+                                    print(f"[SYNC CHECK] Added {added_count} tracks to '{name}' (from library)", flush=True)
                                 
-                                attrs = playlist_data.get("attributes", {}) if isinstance(playlist_data, dict) else {}
-                                apple_last_modified = attrs.get("lastModifiedDate")
+                                # Download tracks that aren't in the library yet
+                                tracks_needing_download = list(tracks_to_add - set(
+                                    t.get("id") for t in remote_tracks 
+                                    if cursor.execute("SELECT id FROM Track WHERE appleMusicId = ?", (t.get("id"),)).fetchone()
+                                ))
                                 
-                                if apple_last_modified:
-                                    # Update the database with the new lastModifiedDate
-                                    cursor.execute(
-                                        "UPDATE Playlist SET appleLastModifiedDate = ?, lastSyncedAt = ? WHERE id = ?",
-                                        (apple_last_modified, datetime.now().isoformat(), playlist_id)
+                                if tracks_needing_download:
+                                    print(f"[SYNC CHECK] Downloading {len(tracks_needing_download)} missing tracks for '{name}'...", flush=True)
+                                    downloaded = await download_tracks_for_sync(
+                                        track_ids=tracks_needing_download,
+                                        playlist_id=playlist_id,
+                                        cookies=cookies,
+                                        cursor=cursor,
+                                        playlist_name=name
                                     )
-                                    print(f"[SYNC CHECK] ✅ Updated '{name}' lastModifiedDate to {apple_last_modified}", flush=True)
+                                    if downloaded > 0:
+                                        added_count += downloaded
+                                        print(f"[SYNC CHECK] ✅ Downloaded and added {downloaded} tracks", flush=True)
+                            
+                            # Update track positions to match remote order
+                            cursor.execute("""
+                                SELECT pt.id, t.appleMusicId 
+                                FROM PlaylistTrack pt 
+                                JOIN Track t ON pt.trackId = t.id 
+                                WHERE pt.playlistId = ?
+                            """, (playlist_id,))
+                            current_tracks = cursor.fetchall()
+                            local_id_to_pt_id = {row[1]: row[0] for row in current_tracks if row[1]}
+                            
+                            # Build position map from remote order
+                            for new_pos, remote_track in enumerate(remote_tracks):
+                                remote_id = remote_track.get("id")
+                                if remote_id in local_id_to_pt_id:
+                                    pt_id = local_id_to_pt_id[remote_id]
+                                    cursor.execute("UPDATE PlaylistTrack SET position = ? WHERE id = ?", (new_pos, pt_id))
+                            
+                            # Update playlist name and description if changed
+                            reason_data = sync_reasons.get(playlist_id, {})
+                            remote_name = reason_data.get("remote_name") or attrs.get("name")
+                            remote_desc = reason_data.get("remote_desc")
+                            if remote_desc is None:
+                                remote_desc = attrs.get("description", {})
+                                if isinstance(remote_desc, dict):
+                                    remote_desc = remote_desc.get("standard", "")
+                            
+                            if reason_data.get("name_differs") or reason_data.get("desc_differs") or reason_data.get("artwork_differs"):
+                                remote_artwork = reason_data.get("remote_artwork_url") or ""
+                                cursor.execute(
+                                    "UPDATE Playlist SET name = ?, description = ?, artworkUrl = ? WHERE id = ?",
+                                    (remote_name, remote_desc or "", remote_artwork, playlist_id)
+                                )
+                                if reason_data.get("name_differs"):
+                                    print(f"[SYNC CHECK] Updated playlist name to '{remote_name}'", flush=True)
+                                if reason_data.get("desc_differs"):
+                                    print(f"[SYNC CHECK] Updated playlist description", flush=True)
+                                if reason_data.get("artwork_differs"):
+                                    print(f"[SYNC CHECK] Updated playlist artwork", flush=True)
+                            
+                            # Update lastModifiedDate
+                            apple_last_modified = attrs.get("lastModifiedDate") or datetime.now().isoformat()
+                            cursor.execute(
+                                "UPDATE Playlist SET appleLastModifiedDate = ?, lastSyncedAt = ? WHERE id = ?",
+                                (apple_last_modified, datetime.now().isoformat(), playlist_id)
+                            )
+                            
+                            print(f"[SYNC CHECK] ✅ Synced '{remote_name or name}': -{removed_count} tracks, +{added_count} tracks", flush=True)
+                            
                         except Exception as e:
                             print(f"[SYNC CHECK] Error syncing playlist '{name}': {e}", flush=True)
+                            traceback.print_exc()
                     
                     conn.commit()
                     conn.close()
                     print(f"[SYNC CHECK] ✅ Sync complete for {len(needs_sync)} playlist(s)", flush=True)
                 except Exception as e:
                     print(f"[SYNC CHECK] Error during sync update: {e}", flush=True)
+                    traceback.print_exc()
             else:
                 print("[SYNC CHECK] Auto-sync disabled, changes detected but not syncing", flush=True)
+                conn.close()
         else:
             print("[SYNC CHECK] ✅ All playlists are up to date", flush=True)
+            conn.close()
             
     except Exception as e:
         print(f"[SYNC CHECK] Error during sync check: {e}", flush=True)
@@ -721,7 +1529,7 @@ async def validate_url(request: ValidateUrlRequest):
                             artist_name = attrs.get("artistName")
                             artwork = attrs.get("artwork", {})
                             track_count = attrs.get("trackCount")
-                            artwork_url = artwork.get("url", "").replace("{w}", "300").replace("{h}", "300") if artwork else None
+                            artwork_url = artwork.get("url", "").replace("{w}", "1200").replace("{h}", "1200") if artwork else None
                             
                             # Get description from editorialNotes
                             editorial_notes = attrs.get("editorialNotes", {})
@@ -763,7 +1571,7 @@ async def validate_url(request: ValidateUrlRequest):
                             relationships = playlist_data.get("relationships", {}) if isinstance(playlist_data, dict) else {}
                             
                             artwork = attrs.get("artwork", {})
-                            artwork_url = artwork.get("url", "").replace("{w}", "300").replace("{h}", "300") if artwork else None
+                            artwork_url = artwork.get("url", "").replace("{w}", "1200").replace("{h}", "1200") if artwork else None
                             
                             # Get track count from attributes first, then from relationships.tracks.meta.total
                             track_count = attrs.get("trackCount")
@@ -813,7 +1621,7 @@ async def validate_url(request: ValidateUrlRequest):
                             
                             attrs = song_data.get("attributes", {}) if isinstance(song_data, dict) else {}
                             artwork = attrs.get("artwork", {})
-                            artwork_url = artwork.get("url", "").replace("{w}", "300").replace("{h}", "300") if artwork else None
+                            artwork_url = artwork.get("url", "").replace("{w}", "1200").replace("{h}", "1200") if artwork else None
                             
                             name = attrs.get("name")
                             if name:
@@ -851,9 +1659,12 @@ async def validate_batch(request: ValidateBatchRequest):
     Deduplicates by catalog Apple Music ID to avoid importing the same content twice.
     """
     # Find all valid URLs in the text
+    print(f"[DEBUG] validate_batch input text: {request.text[:200]}...", flush=True)
     parsed_urls = find_all_apple_music_urls(request.text)
+    print(f"[DEBUG] find_all_apple_music_urls result: {parsed_urls}", flush=True)
     
     if not parsed_urls:
+        print(f"[DEBUG] No URLs found, returning empty", flush=True)
         return ValidateBatchResponse(items=[], total_found=0)
     
     items = []
@@ -920,7 +1731,7 @@ async def validate_batch(request: ValidateBatchRequest):
                             seen_catalog_ids.add(dedup_key)
                             
                             artwork = attrs.get("artwork", {})
-                            artwork_url = artwork.get("url", "").replace("{w}", "300").replace("{h}", "300") if artwork else None
+                            artwork_url = artwork.get("url", "").replace("{w}", "1200").replace("{h}", "1200") if artwork else None
                             
                             items.append(ValidateUrlResponse(
                                 valid=True,
@@ -960,7 +1771,7 @@ async def validate_batch(request: ValidateBatchRequest):
                             seen_catalog_ids.add(dedup_key)
                             
                             artwork = attrs.get("artwork", {})
-                            artwork_url = artwork.get("url", "").replace("{w}", "300").replace("{h}", "300") if artwork else None
+                            artwork_url = artwork.get("url", "").replace("{w}", "1200").replace("{h}", "1200") if artwork else None
                             
                             track_count = attrs.get("trackCount")
                             if not track_count:
@@ -984,7 +1795,9 @@ async def validate_batch(request: ValidateBatchRequest):
                             ))
                     
                     elif content_type == "song":
+                        print(f"[DEBUG] Fetching song: {content_id} (API storefront: {apple_music_api.storefront})", flush=True)
                         data = await apple_music_api.get_song(content_id)
+                        print(f"[DEBUG] Song data received: {data is not None}", flush=True)
                         
                         if data:
                             if isinstance(data, dict) and 'data' in data:
@@ -993,6 +1806,7 @@ async def validate_batch(request: ValidateBatchRequest):
                                     data = data_list[0]
                             
                             attrs = data.get("attributes", {}) if isinstance(data, dict) else {}
+                            print(f"[DEBUG] Song attrs keys: {list(attrs.keys())[:5]}", flush=True)
                             
                             # Get catalog ID for song
                             play_params = attrs.get("playParams", {})
@@ -1006,17 +1820,30 @@ async def validate_batch(request: ValidateBatchRequest):
                             seen_catalog_ids.add(dedup_key)
                             
                             artwork = attrs.get("artwork", {})
-                            artwork_url = artwork.get("url", "").replace("{w}", "300").replace("{h}", "300") if artwork else None
+                            artwork_url = artwork.get("url", "").replace("{w}", "1200").replace("{h}", "1200") if artwork else None
                             
+                            song_name = attrs.get("name", "Unknown Song")
+                            print(f"[DEBUG] Adding song to items: {song_name}", flush=True)
                             items.append(ValidateUrlResponse(
                                 valid=True,
                                 type=content_type,
-                                title=attrs.get("name", "Unknown Song"),
+                                title=song_name,
                                 artist=attrs.get("artistName"),
                                 artwork_url=artwork_url,
                                 track_count=1,
                                 apple_music_id=catalog_id,
                                 extracted_url=url_parsed.get("extracted_url"),
+                            ))
+                        else:
+                            print(f"[DEBUG] Song data was None/empty - likely not available in storefront '{apple_music_api.storefront}'", flush=True)
+                            # Add an entry with error message about storefront
+                            items.append(ValidateUrlResponse(
+                                valid=False,
+                                type=content_type,
+                                title="Content not available",
+                                apple_music_id=content_id,
+                                extracted_url=url_parsed.get("extracted_url"),
+                                error=f"This content is not available in your Apple Music region ({apple_music_api.storefront.upper()}). Try using a URL from your region."
                             ))
                 
                 except Exception as e:
@@ -1079,6 +1906,78 @@ class CheckSyncResponse(BaseModel):
     needs_sync: bool
     apple_last_modified: Optional[str] = None  # ISO format datetime string
     message: str
+
+
+class PlaylistTracksRequest(BaseModel):
+    appleMusicId: str
+    globalId: Optional[str] = None
+    cookies: str
+
+
+class PlaylistTrackItem(BaseModel):
+    position: int
+    appleMusicId: str
+    title: str
+    artistName: str
+    albumName: Optional[str] = None
+    durationMs: Optional[int] = None
+
+
+class PlaylistTracksResponse(BaseModel):
+    tracks: list[PlaylistTrackItem]
+    count: int
+    lastModifiedDate: Optional[str] = None
+
+
+@app.post("/playlist-tracks", response_model=PlaylistTracksResponse)
+async def get_playlist_tracks(request: PlaylistTracksRequest):
+    """Get all tracks for a playlist from Apple Music API."""
+    try:
+        api = await get_or_create_api(request.cookies)
+        
+        # Prefer globalId for fetching
+        fetch_id = request.globalId or request.appleMusicId
+        is_library = fetch_id.startswith(("p.", "i.", "l."))
+        
+        if is_library:
+            playlist_data = await api.get_library_playlist(fetch_id)
+        else:
+            playlist_data = await api.get_playlist(fetch_id)
+        
+        if not playlist_data:
+            return PlaylistTracksResponse(tracks=[], count=0)
+        
+        if isinstance(playlist_data, dict) and 'data' in playlist_data:
+            playlist_data = playlist_data['data'][0] if playlist_data['data'] else None
+        
+        if not playlist_data:
+            return PlaylistTracksResponse(tracks=[], count=0)
+        
+        attrs = playlist_data.get("attributes", {})
+        rels = playlist_data.get("relationships", {})
+        tracks_data = rels.get("tracks", {}).get("data", [])
+        
+        tracks = []
+        for i, track in enumerate(tracks_data):
+            track_attrs = track.get("attributes", {})
+            tracks.append(PlaylistTrackItem(
+                position=i,
+                appleMusicId=track.get("id", ""),
+                title=track_attrs.get("name", "Unknown"),
+                artistName=track_attrs.get("artistName", "Unknown"),
+                albumName=track_attrs.get("albumName"),
+                durationMs=track_attrs.get("durationInMillis"),
+            ))
+        
+        return PlaylistTracksResponse(
+            tracks=tracks,
+            count=len(tracks),
+            lastModifiedDate=attrs.get("lastModifiedDate")
+        )
+        
+    except Exception as e:
+        print(f"Error fetching playlist tracks: {e}", flush=True)
+        return PlaylistTracksResponse(tracks=[], count=0)
 
 
 @app.post("/check-playlist-sync", response_model=CheckSyncResponse)
