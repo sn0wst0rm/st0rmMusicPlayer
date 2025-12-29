@@ -6,6 +6,7 @@ import { AudioWaveform } from "@/components/ui/audio-waveform"
 import { TrackContextMenu } from "@/components/ui/track-context-menu"
 import { cn } from "@/lib/utils"
 import { Track, usePlayerStore } from "@/lib/store"
+import { toast } from "sonner"
 
 interface SongsViewProps {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -451,6 +452,9 @@ export function SongsView({
                                                         onClick={(e) => {
                                                             e.stopPropagation()
                                                             usePlayerStore.getState().playNext(track)
+                                                            toast.success("Playing Next", {
+                                                                description: track.title
+                                                            })
                                                         }}
                                                     >
                                                         <ListPlus className="h-4 w-4" />
@@ -463,6 +467,9 @@ export function SongsView({
                                                         onClick={(e) => {
                                                             e.stopPropagation()
                                                             usePlayerStore.getState().addToQueue(track)
+                                                            toast.success("Added to Queue", {
+                                                                description: track.title
+                                                            })
                                                         }}
                                                     >
                                                         <Plus className="h-4 w-4" />

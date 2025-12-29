@@ -8,6 +8,7 @@ import { TrackContextMenu } from "@/components/ui/track-context-menu"
 import { Play, Shuffle, ChevronLeft, ChevronDown, ChevronUp, Pause, ListPlus, Plus } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { usePlayerStore, Track, SelectedAlbum } from "@/lib/store"
+import { toast } from "sonner"
 
 interface AlbumDetailViewProps {
     album: SelectedAlbum
@@ -266,6 +267,9 @@ export function AlbumDetailView({ album, onBack, onArtistClick }: AlbumDetailVie
                                         onClick={(e) => {
                                             e.stopPropagation()
                                             playNext(track)
+                                            toast.success("Playing Next", {
+                                                description: track.title
+                                            })
                                         }}
                                     >
                                         <ListPlus className="h-4 w-4" />
@@ -278,6 +282,9 @@ export function AlbumDetailView({ album, onBack, onArtistClick }: AlbumDetailVie
                                         onClick={(e) => {
                                             e.stopPropagation()
                                             addToQueue(track)
+                                            toast.success("Added to Queue", {
+                                                description: track.title
+                                            })
                                         }}
                                     >
                                         <Plus className="h-4 w-4" />

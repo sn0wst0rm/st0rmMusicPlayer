@@ -19,6 +19,7 @@ import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 import { Virtuoso } from 'react-virtuoso'
 import { Skeleton } from "@/components/ui/skeleton"
+import { toast } from "sonner"
 
 // Cover art with skeleton loading
 const CoverArtWithSkeleton = memo(function CoverArtWithSkeleton({
@@ -150,10 +151,20 @@ const PlaybackHistoryItem = memo(function PlaybackHistoryItem({
                 </div>
             </div>
             <div className="flex items-center opacity-0 group-hover:opacity-100 transition-opacity">
-                <Button variant="ghost" size="icon" title="Play Next" onClick={() => onPlayNext(entry.track)}>
+                <Button variant="ghost" size="icon" title="Play Next" onClick={() => {
+                    onPlayNext(entry.track)
+                    toast.success("Playing Next", {
+                        description: entry.track.title
+                    })
+                }}>
                     <Play className="h-4 w-4" />
                 </Button>
-                <Button variant="ghost" size="icon" title="Add to Queue" onClick={() => onAddToQueue(entry.track)}>
+                <Button variant="ghost" size="icon" title="Add to Queue" onClick={() => {
+                    onAddToQueue(entry.track)
+                    toast.success("Added to Queue", {
+                        description: entry.track.title
+                    })
+                }}>
                     <Plus className="h-4 w-4" />
                 </Button>
             </div>

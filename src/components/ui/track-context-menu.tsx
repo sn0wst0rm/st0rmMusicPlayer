@@ -66,10 +66,16 @@ export function TrackContextMenu({
 
     const handlePlayNext = () => {
         playNext(track)
+        toast.success("Playing Next", {
+            description: track.title
+        })
     }
 
     const handleAddToQueue = () => {
         addToQueue(track)
+        toast.success("Added to Queue", {
+            description: track.title
+        })
     }
 
     const handleGoToArtist = () => {

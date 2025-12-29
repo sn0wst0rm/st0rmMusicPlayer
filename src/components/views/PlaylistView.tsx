@@ -3,7 +3,7 @@
 import * as React from "react"
 import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
-import { AudioWaveform } from "@/components/ui/audio-waveform"
+import { TrackCoverThumbnail } from "@/components/ui/track-cover-thumbnail"
 import { TrackContextMenu } from "@/components/ui/track-context-menu"
 import { Textarea } from "@/components/ui/textarea"
 import {
@@ -124,47 +124,20 @@ function SortableTrackRow({
                 )}
                 onClick={() => handlePlayTrack(track, index)}
             >
-                {/* Track Number / Play Button / Waveform */}
-                <div className="w-8 h-8 flex items-center justify-center flex-shrink-0">
-                    {isCurrentTrackPlaying(track.id) ? (
-                        <div className="relative h-8 w-8 flex items-center justify-center">
-                            <AudioWaveform className="group-hover:hidden" />
-                            <Button
-                                variant="ghost"
-                                size="icon"
-                                className="h-8 w-8 text-primary hidden group-hover:flex"
-                                onClick={(e) => {
-                                    e.stopPropagation()
-                                    setIsPlaying(false)
-                                }}
-                            >
-                                <Pause className="h-4 w-4 fill-current" />
-                            </Button>
-                        </div>
-                    ) : isCurrentTrack(track.id) ? (
-                        <div className="relative h-8 w-8 flex items-center justify-center">
-                            <Pause className="h-4 w-4 fill-primary text-primary group-hover:hidden" />
-                            <Button
-                                variant="ghost"
-                                size="icon"
-                                className="h-8 w-8 text-primary hidden group-hover:flex"
-                                onClick={(e) => {
-                                    e.stopPropagation()
-                                    setIsPlaying(true)
-                                }}
-                            >
-                                <Play className="h-4 w-4 fill-current" />
-                            </Button>
-                        </div>
-                    ) : (
-                        <>
-                            <span className="text-muted-foreground text-sm group-hover:hidden">
-                                {index + 1}
-                            </span>
-                            <Play className="h-4 w-4 text-primary fill-primary hidden group-hover:block" />
-                        </>
-                    )}
-                </div>
+                {/* Track Cover Thumbnail */}
+                <TrackCoverThumbnail
+                    trackId={track.id}
+                    isPlaying={isCurrentTrackPlaying(track.id)}
+                    isPaused={isCurrentTrack(track.id) && !isCurrentTrackPlaying(track.id)}
+                    onPlayPauseClick={(e) => {
+                        e.stopPropagation()
+                        if (isCurrentTrackPlaying(track.id)) {
+                            setIsPlaying(false)
+                        } else {
+                            setIsPlaying(true)
+                        }
+                    }}
+                />
 
                 {/* Track Info */}
                 <div className="flex-1 min-w-0">
@@ -189,6 +162,9 @@ function SortableTrackRow({
                         onClick={(e) => {
                             e.stopPropagation()
                             playNext(track)
+                            toast.success("Playing Next", {
+                                description: track.title
+                            })
                         }}
                     >
                         <ListPlus className="h-4 w-4" />
@@ -201,6 +177,9 @@ function SortableTrackRow({
                         onClick={(e) => {
                             e.stopPropagation()
                             addToQueue(track)
+                            toast.success("Added to Queue", {
+                                description: track.title
+                            })
                         }}
                     >
                         <Plus className="h-4 w-4" />
