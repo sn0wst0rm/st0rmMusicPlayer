@@ -4,7 +4,7 @@ import { Album } from "@/types/music"
 import { Card } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
-import { PlayCircle } from "lucide-react"
+import { Play } from "lucide-react"
 import { cn } from "@/lib/utils"
 
 interface AlbumCardProps {
@@ -55,8 +55,8 @@ export function AlbumCard({ album, playAlbum, onSelect, artistName, className }:
                 </div>
 
                 <div className="absolute inset-0 bg-black/20 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center z-10">
-                    <Button size="icon" className="rounded-full h-12 w-12 bg-primary text-primary-foreground hover:bg-primary/90 shadow-xl scale-95 group-hover:scale-100 transition-transform" onClick={handlePlayClick}>
-                        <PlayCircle className="h-12 w-12" />
+                    <Button size="icon" className="rounded-full h-14 w-14 bg-primary text-white hover:bg-primary/90 hover:scale-105 shadow-xl transition-all" onClick={handlePlayClick}>
+                        <Play className="h-6 w-6" fill="currentColor" />
                     </Button>
                 </div>
             </div>

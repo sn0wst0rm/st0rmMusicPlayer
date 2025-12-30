@@ -20,7 +20,7 @@ type DynamicGradientBackgroundProps = Omit<HTMLMotionProps<'div'>, 'animate' | '
 function DynamicGradientBackground({
     className,
     colors,
-    duration = 12,
+    duration = 20,
     isPaused = false,
     style,
     ...props
@@ -30,9 +30,9 @@ function DynamicGradientBackground({
         if (colors && colors.length >= 2) {
             // Create a multi-stop gradient with the provided colors, repeating first for seamless loop
             const colorStops = [...colors, colors[0]].join(', ');
-            return `linear-gradient(270deg, ${colorStops})`;
+            return `linear-gradient(135deg, ${colorStops})`;
         }
-        return 'linear-gradient(270deg, #ff2d55, #ff375f, #e01c47, #ff6b8a, #ff2d55)';
+        return 'linear-gradient(135deg, #ff2d55, #ff375f, #e01c47, #ff6b8a, #ff2d55)';
     }, [colors]);
 
     return (
@@ -47,13 +47,13 @@ function DynamicGradientBackground({
                 backgroundSize: '300% 300%',
                 ...style,
             }}
-            initial={{ backgroundPosition: '0% 50%' }}
-            animate={isPaused ? undefined : { backgroundPosition: ['0% 50%', '100% 50%', '0% 50%'] }}
+            initial={{ backgroundPosition: '0% 0%' }}
+            animate={isPaused ? undefined : { backgroundPosition: ['0% 0%', '100% 100%'] }}
             transition={{
                 duration: duration,
                 ease: 'linear',
                 repeat: Infinity,
-                repeatType: 'loop',
+                repeatType: 'reverse', // Move back and forth for smooth diagonal
             }}
             {...props}
         />

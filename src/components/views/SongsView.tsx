@@ -245,10 +245,9 @@ export function SongsView({
 
                 setContainerWidth(width)
 
-                // If initial sizing wasn't done yet (Safari fallback), do it now
-                if (!initialSizingDoneRef.current) {
-                    calculateWidths(width)
-                }
+                // Always recalculate widths when container size changes
+                // This ensures columns resize when lyrics sidebar opens/closes
+                calculateWidths(width)
             })
 
             observer.observe(scroller)

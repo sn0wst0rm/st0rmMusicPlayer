@@ -132,7 +132,7 @@ export function AppSidebar() {
     return (
         <Sidebar collapsible="icon" className="border-r-0 bg-sidebar text-sidebar-foreground" variant="sidebar">
             <SidebarHeader className="p-4 group-data-[collapsible=icon]:px-2">
-                <div className="flex items-center gap-2 px-2 overflow-hidden transition-all group-data-[collapsible=icon]:justify-center h-7">
+                <div className="flex items-center gap-0.5 px-2 overflow-hidden transition-all group-data-[collapsible=icon]:justify-center h-7">
                     <Lightning className="size-5 shrink-0 text-primary" />
                     <h2 className="text-xl font-semibold tracking-tight text-primary truncate group-data-[collapsible=icon]:hidden">Music</h2>
                 </div>
