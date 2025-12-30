@@ -1309,6 +1309,114 @@ async def get_or_create_api(cookies: str):
             pass
 
 
+# ============ Word-Synced Lyrics Functions ============
+
+async def get_syllable_lyrics(api, song_id: str, language: str = "en-US") -> dict | None:
+    """
+    Fetch word-by-word (syllable) lyrics from Apple Music.
+    Returns TTML with <span> elements for each word.
+    """
+    try:
+        url = f"https://amp-api.music.apple.com/v1/catalog/{api.storefront}/songs/{song_id}/syllable-lyrics"
+        response = await api.client.get(url, params={"l": language})
+        
+        if response.status_code != 200:
+            return None
+        
+        data = response.json()
+        if not data.get("data") or len(data["data"]) == 0:
+            return None
+        
+        ttml = data["data"][0].get("attributes", {}).get("ttml")
+        if not ttml:
+            return None
+        
+        # Check if it actually has word-level timing (span elements)
+        has_word_timing = "<span" in ttml
+        
+        return {
+            "type": "syllable" if has_word_timing else "line",
+            "ttml": ttml,
+            "has_word_timing": has_word_timing
+        }
+    except Exception as e:
+        print(f"[LYRICS] Error fetching syllable-lyrics for {song_id}: {e}", flush=True)
+        return None
+
+
+async def get_line_lyrics(api, song_id: str, language: str = "en-US") -> dict | None:
+    """
+    Fetch line-by-line synced lyrics from Apple Music.
+    Returns TTML with <p> elements for each line.
+    """
+    try:
+        url = f"https://amp-api.music.apple.com/v1/catalog/{api.storefront}/songs/{song_id}/lyrics"
+        response = await api.client.get(url, params={"l": language})
+        
+        if response.status_code != 200:
+            return None
+        
+        data = response.json()
+        if not data.get("data") or len(data["data"]) == 0:
+            return None
+        
+        ttml = data["data"][0].get("attributes", {}).get("ttml")
+        if not ttml:
+            return None
+        
+        return {
+            "type": "line",
+            "ttml": ttml,
+            "has_word_timing": False
+        }
+    except Exception as e:
+        print(f"[LYRICS] Error fetching line-lyrics for {song_id}: {e}", flush=True)
+        return None
+
+
+async def get_lyrics_with_fallback(api, song_id: str, language: str = "en-US") -> dict | None:
+    """
+    Get lyrics with fallback priority:
+    1. Word-by-word synced (syllable-lyrics with <span> elements)
+    2. Line-by-line synced (lyrics endpoint or syllable-lyrics without spans)
+    3. Unsynced (from song metadata hasLyrics flag)
+    4. None
+    
+    Returns dict with keys: type, ttml (optional), has_word_timing
+    """
+    print(f"[LYRICS] Fetching lyrics for song {song_id} with fallback...", flush=True)
+    
+    # 1. Try syllable-lyrics first (may have word or line timing)
+    result = await get_syllable_lyrics(api, song_id, language)
+    if result:
+        print(f"[LYRICS] Got {result['type']} lyrics from syllable-lyrics endpoint", flush=True)
+        return result
+    
+    # 2. Try line lyrics endpoint
+    result = await get_line_lyrics(api, song_id, language)
+    if result:
+        print(f"[LYRICS] Got line lyrics from lyrics endpoint", flush=True)
+        return result
+    
+    # 3. Check if song has unsynced lyrics (hasLyrics flag)
+    try:
+        song_data = await api.get_song(song_id)
+        if song_data and song_data.get("data"):
+            attrs = song_data["data"][0].get("attributes", {})
+            if attrs.get("hasLyrics"):
+                print(f"[LYRICS] Song has unsynced lyrics (hasLyrics=True)", flush=True)
+                return {
+                    "type": "unsynced",
+                    "ttml": None,
+                    "has_word_timing": False
+                }
+    except Exception as e:
+        print(f"[LYRICS] Error checking hasLyrics: {e}", flush=True)
+    
+    print(f"[LYRICS] No lyrics available for song {song_id}", flush=True)
+    return None
+
+
 def extract_metadata_from_file(file_path: str) -> dict:
     """Extract metadata from a downloaded audio file using mutagen."""
     try:
@@ -2322,10 +2430,31 @@ async def start_download(request: DownloadRequest):
                         
                         # Find lyrics file if it exists
                         lyrics_path = None
+                        lyrics_type = None
                         if request.lyrics_format != "none":
                             potential_lrc = Path(file_path).with_suffix(f".{request.lyrics_format}")
                             if potential_lrc.exists():
                                 lyrics_path = str(potential_lrc)
+                            
+                            # Try to get word-by-word lyrics if we have the song's Apple Music ID
+                            song_apple_id = metadata.get("songAppleMusicId") or apple_ids.get("songAppleMusicId")
+                            if song_apple_id and request.lyrics_format == "ttml":
+                                try:
+                                    # Fetch syllable-lyrics with word-by-word timing
+                                    lyrics_result = await get_lyrics_with_fallback(
+                                        apple_music_api, 
+                                        song_apple_id, 
+                                        request.language
+                                    )
+                                    if lyrics_result and lyrics_result.get("ttml"):
+                                        # Save TTML with word-level timing
+                                        ttml_path = Path(file_path).with_suffix(".ttml")
+                                        ttml_path.write_text(lyrics_result["ttml"], encoding="utf-8")
+                                        lyrics_path = str(ttml_path)
+                                        lyrics_type = lyrics_result.get("type", "line")
+                                        print(f"[LYRICS] Saved {lyrics_type} lyrics to {lyrics_path}", flush=True)
+                                except Exception as lyrics_err:
+                                    print(f"[LYRICS] Error fetching lyrics: {lyrics_err}", flush=True)
                         
                         # Find cover file
                         cover_path = None

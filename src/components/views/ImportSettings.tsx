@@ -10,6 +10,16 @@ import {
     SheetDescription,
     VisuallyHidden,
 } from "@/components/ui/sheet"
+import {
+    AlertDialog,
+    AlertDialogAction,
+    AlertDialogCancel,
+    AlertDialogContent,
+    AlertDialogDescription,
+    AlertDialogFooter,
+    AlertDialogHeader,
+    AlertDialogTitle,
+} from "@/components/ui/alert-dialog"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -122,6 +132,29 @@ export function ImportSettings({ open, onOpenChange, onSettingsUpdate }: ImportS
         } finally {
             setIsSaving(false)
         }
+    }
+
+    const [showLyricsWarning, setShowLyricsWarning] = useState(false)
+    const [pendingLyricsFormat, setPendingLyricsFormat] = useState<string>("")
+
+    // ... (existing helper functions)
+
+    const handleLyricsFormatChange = (value: string) => {
+        if (!settings) return
+
+        // If switching away from TTML, show warning
+        if (value !== 'ttml' && settings.lyricsFormat === 'ttml') {
+            setPendingLyricsFormat(value)
+            setShowLyricsWarning(true)
+        } else {
+            setSettings({ ...settings, lyricsFormat: value })
+        }
+    }
+
+    const confirmLyricsFormatChange = () => {
+        if (!settings || !pendingLyricsFormat) return
+        setSettings({ ...settings, lyricsFormat: pendingLyricsFormat })
+        setShowLyricsWarning(false)
     }
 
     if (isLoading || !settings) {
@@ -237,7 +270,7 @@ export function ImportSettings({ open, onOpenChange, onSettingsUpdate }: ImportS
                         <Label>Synced Lyrics Format</Label>
                         <Select
                             value={settings.lyricsFormat}
-                            onValueChange={(value) => setSettings({ ...settings, lyricsFormat: value })}
+                            onValueChange={handleLyricsFormatChange}
                         >
                             <SelectTrigger>
                                 <SelectValue placeholder="Select format" />
@@ -377,6 +410,7 @@ export function ImportSettings({ open, onOpenChange, onSettingsUpdate }: ImportS
                         {isSaving ? (
                             <>
                                 <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
                                 Saving...
                             </>
                         ) : saveStatus === 'success' ? (
@@ -394,6 +428,24 @@ export function ImportSettings({ open, onOpenChange, onSettingsUpdate }: ImportS
                         )}
                     </Button>
                 </div>
+
+                {/* Warning Dialog for Lyrics Format */}
+                <AlertDialog open={showLyricsWarning} onOpenChange={setShowLyricsWarning}>
+                    <AlertDialogContent>
+                        <AlertDialogHeader>
+                            <AlertDialogTitle>Word-synced Lyrics Unavailable</AlertDialogTitle>
+                            <AlertDialogDescription>
+                                Word-by-word synced lyrics (syllable lyrics) are only supported when using the <strong>TTML</strong> format.
+                                Changing this setting will default future downloads to line-by-line sync.
+                                Are you sure you want to change it?
+                            </AlertDialogDescription>
+                        </AlertDialogHeader>
+                        <AlertDialogFooter>
+                            <AlertDialogCancel onClick={() => setPendingLyricsFormat("")}>Cancel</AlertDialogCancel>
+                            <AlertDialogAction onClick={confirmLyricsFormatChange}>Change Format</AlertDialogAction>
+                        </AlertDialogFooter>
+                    </AlertDialogContent>
+                </AlertDialog>
             </SheetContent>
         </Sheet>
     )

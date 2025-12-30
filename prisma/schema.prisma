@@ -134,7 +134,7 @@ model GamdlSettings {
     cookies          String? // Netscape format cookies content
     outputPath       String    @default("./music")
     songCodec        String    @default("aac-legacy")
-    lyricsFormat     String    @default("lrc")
+    lyricsFormat     String    @default("ttml")
     coverSize        Int       @default(1200)
     saveCover        Boolean   @default(true)
     language         String    @default("en-US")
