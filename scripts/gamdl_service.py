@@ -1178,6 +1178,9 @@ class DownloadRequest(BaseModel):
     save_cover: bool = True
     language: str = "en-US"
     overwrite: bool = False
+    # Multi-language lyrics settings
+    lyrics_translation_langs: str = ""  # Comma-separated language codes
+    lyrics_pronunciation_langs: str = ""  # Comma-separated script codes
 
 
 class DownloadStatus(BaseModel):
@@ -1311,14 +1314,48 @@ async def get_or_create_api(cookies: str):
 
 # ============ Word-Synced Lyrics Functions ============
 
-async def get_syllable_lyrics(api, song_id: str, language: str = "en-US") -> dict | None:
+async def get_syllable_lyrics(
+    api, 
+    song_id: str, 
+    language: str = "en-gb",  # Default to English for best translation availability
+    translation_lang: str | None = None,
+    script_lang: str | None = None
+) -> dict | None:
     """
     Fetch word-by-word (syllable) lyrics from Apple Music.
-    Returns TTML with <span> elements for each word.
+    
+    Args:
+        api: AppleMusicApi instance
+        song_id: Apple Music song ID
+        language: Base language for request (default: en-gb for best translations)
+        translation_lang: Optional translation language code (e.g., 'it', 'en')
+        script_lang: Optional script/romanization (e.g., 'ja-Latn', 'ko-Latn')
+    
+    Returns TTML with <span> elements for each word, potentially containing
+    multiple language versions embedded via xml:lang attributes.
     """
     try:
         url = f"https://amp-api.music.apple.com/v1/catalog/{api.storefront}/songs/{song_id}/syllable-lyrics"
-        response = await api.client.get(url, params={"l": language})
+        
+        # Build params according to Apple Music API spec
+        # Use l[lyrics] for translation requests, l[script] for romanization
+        params = {"extend": "ttmlLocalizations"}
+        
+        # Set lyrics language - this determines what translations are included
+        if translation_lang:
+            params["l[lyrics]"] = translation_lang
+        else:
+            params["l[lyrics]"] = language  # Use English by default for translations
+        
+        # Add script/romanization if specified (e.g., ko-Latn for Korean romanization)
+        if script_lang:
+            params["l[script]"] = script_lang
+        else:
+            # Default to English-Latin script for romanization
+            params["l[script]"] = "en-Latn"
+        
+        print(f"[LYRICS] Requesting syllable-lyrics with params: {params}", flush=True)
+        response = await api.client.get(url, params=params)
         
         if response.status_code != 200:
             return None
@@ -1327,21 +1364,97 @@ async def get_syllable_lyrics(api, song_id: str, language: str = "en-US") -> dic
         if not data.get("data") or len(data["data"]) == 0:
             return None
         
-        ttml = data["data"][0].get("attributes", {}).get("ttml")
+        attributes = data["data"][0].get("attributes", {})
+        ttml = attributes.get("ttml")
+        
+        # Fallback to ttmlLocalizations if ttml is missing (common for some regions/songs)
+        if not ttml:
+            ttml = attributes.get("ttmlLocalizations")
+
         if not ttml:
             return None
         
         # Check if it actually has word-level timing (span elements)
         has_word_timing = "<span" in ttml
         
+        # Extract available languages from xml:lang attributes in TTML
+        # Note: The root <tt xml:lang="en"> is just a default, not an actual translation
+        # Real translations only exist when there are MULTIPLE distinct language sections
+        import re
+        lang_matches = re.findall(r'xml:lang="([^"]+)"', ttml)
+        available_langs = list(set(lang_matches))
+        
+        # Separate translations (e.g., "en-US", "ko") from pronunciations (e.g., "ko-Latn")
+        non_latn_langs = [l for l in available_langs if "-Latn" not in l and l != "und"]
+        pronunciations = [l for l in available_langs if "-Latn" in l]
+        
+        # Only consider translations if there are MULTIPLE non-Latn languages
+        # A single language (even if labeled "en") just means the original lyrics, not a translation
+        if len(non_latn_langs) > 1:
+            translations = non_latn_langs
+        else:
+            translations = []  # Single language = no translations available
+        
+        print(f"[LYRICS] TTML languages found: {available_langs}, translations: {translations}, pronunciations: {pronunciations}", flush=True)
+        
         return {
             "type": "syllable" if has_word_timing else "line",
             "ttml": ttml,
-            "has_word_timing": has_word_timing
+            "has_word_timing": has_word_timing,
+            "translation_lang": translation_lang,
+            "script_lang": script_lang,
+            "available_translations": translations,
+            "available_pronunciations": pronunciations
         }
     except Exception as e:
         print(f"[LYRICS] Error fetching syllable-lyrics for {song_id}: {e}", flush=True)
         return None
+
+
+async def probe_lyrics_availability(
+    api,
+    song_id: str,
+    translation_langs: list[str],
+    pronunciation_scripts: list[str]
+) -> dict:
+    """
+    Probe which translations and pronunciations are available for a song.
+    
+    Returns dict with:
+        - available_translations: list of language codes that have translations
+        - available_pronunciations: list of script codes that have pronunciations
+        - has_word_sync: whether word-by-word sync is available
+    """
+    result = {
+        "available_translations": [],
+        "available_pronunciations": [],
+        "has_word_sync": False
+    }
+    
+    # First check if base syllable lyrics exist
+    base_lyrics = await get_syllable_lyrics(api, song_id, api.storefront)
+    if base_lyrics:
+        result["has_word_sync"] = base_lyrics.get("has_word_timing", False)
+    
+    # Probe translations
+    for lang in translation_langs:
+        try:
+            lyrics = await get_syllable_lyrics(api, song_id, translation_lang=lang)
+            if lyrics and lyrics.get("ttml"):
+                result["available_translations"].append(lang)
+        except:
+            pass
+    
+    # Probe pronunciations (romanization)
+    for script in pronunciation_scripts:
+        try:
+            lyrics = await get_syllable_lyrics(api, song_id, script_lang=script)
+            if lyrics and lyrics.get("ttml"):
+                result["available_pronunciations"].append(script)
+        except:
+            pass
+    
+    return result
 
 
 async def get_line_lyrics(api, song_id: str, language: str = "en-US") -> dict | None:
@@ -1415,6 +1528,128 @@ async def get_lyrics_with_fallback(api, song_id: str, language: str = "en-US") -
     
     print(f"[LYRICS] No lyrics available for song {song_id}", flush=True)
     return None
+
+
+async def get_song_audio_locale(api, song_id: str) -> str | None:
+    """Get the audioLocale (native language) from song metadata."""
+    try:
+        url = f"https://amp-api.music.apple.com/v1/catalog/{api.storefront}/songs/{song_id}"
+        response = await api.client.get(url)
+        if response.status_code == 200:
+            data = response.json()
+            if data.get("data"):
+                return data["data"][0].get("attributes", {}).get("audioLocale")
+    except Exception as e:
+        print(f"[LYRICS] Error getting audioLocale: {e}", flush=True)
+    return None
+
+
+async def fetch_all_lyrics_variants(
+    api,
+    song_id: str,
+    translation_langs: list[str],
+    storefront: str = "it"
+) -> dict:
+    """
+    Fetch all lyrics variants for a song.
+    
+    Args:
+        api: AppleMusicApi instance
+        song_id: Apple Music song ID
+        translation_langs: List of translation languages to try (e.g., ['en', 'it'])
+        storefront: Storefront for romanization preference
+    
+    Returns dict with:
+        - audio_locale: Native language of the song
+        - original: dict with ttml, has_word_timing, type (or None)
+        - translations: dict mapping lang -> ttml content
+        - romanization: ttml content (or None)
+        - romanization_script: which script was used (e.g., 'en-Latn')
+    """
+    result = {
+        "audio_locale": None,
+        "original": None,
+        "translations": {},
+        "romanization": None,
+        "romanization_script": None
+    }
+    
+    # 1. Get audioLocale (native language)
+    audio_locale = await get_song_audio_locale(api, song_id)
+    result["audio_locale"] = audio_locale
+    print(f"[LYRICS] Song audioLocale: {audio_locale}", flush=True)
+    
+    if not audio_locale:
+        # Fallback to storefront language if no audioLocale
+        audio_locale = storefront
+        print(f"[LYRICS] No audioLocale found, using storefront: {audio_locale}", flush=True)
+    
+    # 2. Fetch original lyrics in native language (with syllable -> line fallback)
+    print(f"[LYRICS] Fetching original lyrics in {audio_locale}...", flush=True)
+    original = await get_syllable_lyrics(api, song_id, language=audio_locale)
+    if not original:
+        original = await get_line_lyrics(api, song_id, language=audio_locale)
+    
+    if original and original.get("ttml"):
+        result["original"] = original
+        print(f"[LYRICS] Got original lyrics: {len(original['ttml'])} bytes, word_sync={original.get('has_word_timing')}", flush=True)
+    else:
+        print(f"[LYRICS] No original lyrics available", flush=True)
+    
+    # 3. Fetch translations for each selected language != audioLocale
+    for lang in translation_langs:
+        # Normalize language codes for comparison
+        lang_base = lang.split('-')[0].lower()
+        audio_locale_base = audio_locale.split('-')[0].lower() if audio_locale else ""
+        
+        if lang_base == audio_locale_base:
+            print(f"[LYRICS] Skipping translation for {lang} (same as native)", flush=True)
+            continue
+        
+        print(f"[LYRICS] Trying translation: {lang}...", flush=True)
+        trans_result = await get_syllable_lyrics(api, song_id, language=lang)
+        if not trans_result:
+            trans_result = await get_line_lyrics(api, song_id, language=lang)
+        
+        if trans_result and trans_result.get("ttml"):
+            # Check if this is actually different from original (has translation content)
+            if result["original"] and trans_result["ttml"] != result["original"]["ttml"]:
+                result["translations"][lang] = trans_result["ttml"]
+                print(f"[LYRICS] Got translation for {lang}: {len(trans_result['ttml'])} bytes", flush=True)
+            else:
+                print(f"[LYRICS] Translation for {lang} is same as original, skipping", flush=True)
+        else:
+            print(f"[LYRICS] No translation available for {lang}", flush=True)
+    
+    # 4. Romanization handling
+    # Check if original already has romanization embedded
+    if result["original"]:
+        orig_pronunciations = result["original"].get("available_pronunciations", [])
+        if orig_pronunciations:
+            # Romanization is already in the original file
+            result["romanization_script"] = ",".join(orig_pronunciations)
+            result["romanization"] = "embedded"  # Mark as embedded, not separate file
+            print(f"[LYRICS] Romanization already embedded in original: {orig_pronunciations}", flush=True)
+        else:
+            # Try to fetch romanization: try <storefront>-Latn, fallback to en-Latn
+            romanization_scripts = [f"{storefront}-Latn", "en-Latn"]
+            for script in romanization_scripts:
+                print(f"[LYRICS] Trying romanization: {script}...", flush=True)
+                roman_result = await get_syllable_lyrics(api, song_id, language=audio_locale, script_lang=script)
+                
+                if roman_result and roman_result.get("ttml"):
+                    # Check if romanization is actually present (different from original)
+                    if result["original"] and roman_result["ttml"] != result["original"]["ttml"]:
+                        result["romanization"] = roman_result["ttml"]
+                        result["romanization_script"] = script
+                        print(f"[LYRICS] Got romanization ({script}): {len(roman_result['ttml'])} bytes", flush=True)
+                        break
+                    else:
+                        print(f"[LYRICS] Romanization {script} same as original, trying next...", flush=True)
+                else:
+                    print(f"[LYRICS] No romanization for {script}", flush=True)
+    
+    return result
 
 
 def extract_metadata_from_file(file_path: str) -> dict:
@@ -2437,24 +2672,63 @@ async def start_download(request: DownloadRequest):
                                 lyrics_path = str(potential_lrc)
                             
                             # Try to get word-by-word lyrics if we have the song's Apple Music ID
-                            song_apple_id = metadata.get("songAppleMusicId") or apple_ids.get("songAppleMusicId")
+                            # Note: extract_apple_music_ids_from_item returns 'appleMusicId' for songs
+                            song_apple_id = apple_ids.get("appleMusicId") or metadata.get("appleMusicId")
+                            print(f"[LYRICS] song_apple_id={song_apple_id}, lyrics_format={request.lyrics_format}", flush=True)
                             if song_apple_id and request.lyrics_format == "ttml":
                                 try:
-                                    # Fetch syllable-lyrics with word-by-word timing
-                                    lyrics_result = await get_lyrics_with_fallback(
-                                        apple_music_api, 
-                                        song_apple_id, 
-                                        request.language
+                                    # Get translation languages from settings
+                                    translation_langs = getattr(request, 'lyrics_translation_langs', '').split(',')
+                                    translation_langs = [l.strip() for l in translation_langs if l.strip()]
+                                    
+                                    # Fetch all lyrics variants using the new comprehensive function
+                                    lyrics_variants = await fetch_all_lyrics_variants(
+                                        apple_music_api,
+                                        song_apple_id,
+                                        translation_langs,
+                                        storefront=apple_music_api.storefront
                                     )
-                                    if lyrics_result and lyrics_result.get("ttml"):
-                                        # Save TTML with word-level timing
+                                    
+                                    # Store audioLocale
+                                    if lyrics_variants["audio_locale"]:
+                                        metadata["audioLocale"] = lyrics_variants["audio_locale"]
+                                    
+                                    # Save original lyrics
+                                    if lyrics_variants["original"] and lyrics_variants["original"].get("ttml"):
                                         ttml_path = Path(file_path).with_suffix(".ttml")
-                                        ttml_path.write_text(lyrics_result["ttml"], encoding="utf-8")
+                                        ttml_path.write_text(lyrics_variants["original"]["ttml"], encoding="utf-8")
                                         lyrics_path = str(ttml_path)
-                                        lyrics_type = lyrics_result.get("type", "line")
-                                        print(f"[LYRICS] Saved {lyrics_type} lyrics to {lyrics_path}", flush=True)
+                                        metadata["lyricsHasWordSync"] = lyrics_variants["original"].get("has_word_timing", False)
+                                        print(f"[LYRICS] Saved original lyrics to {lyrics_path}", flush=True)
+                                    
+                                    # Save translations as separate files and track paths
+                                    translation_paths = {}
+                                    for lang, ttml_content in lyrics_variants["translations"].items():
+                                        trans_path = Path(file_path).with_suffix(f".{lang}.ttml")
+                                        trans_path.write_text(ttml_content, encoding="utf-8")
+                                        translation_paths[lang] = str(trans_path)
+                                        print(f"[LYRICS] Saved {lang} translation to {trans_path}", flush=True)
+                                    
+                                    if translation_paths:
+                                        metadata["lyricsTranslations"] = json.dumps(translation_paths)
+                                    
+                                    # Save romanization (if separate file, not embedded)
+                                    if lyrics_variants["romanization"] and lyrics_variants["romanization"] != "embedded":
+                                        script = lyrics_variants["romanization_script"]
+                                        roman_path = Path(file_path).with_suffix(f".{script}.ttml")
+                                        roman_path.write_text(lyrics_variants["romanization"], encoding="utf-8")
+                                        metadata["lyricsPronunciations"] = json.dumps({script: str(roman_path)})
+                                        print(f"[LYRICS] Saved romanization ({script}) to {roman_path}", flush=True)
+                                    elif lyrics_variants["romanization"] == "embedded":
+                                        # Romanization is embedded in original TTML, just record the script
+                                        script = lyrics_variants["romanization_script"]
+                                        metadata["lyricsPronunciations"] = json.dumps({script: "embedded"})
+                                        print(f"[LYRICS] Romanization ({script}) is embedded in original", flush=True)
+                                    
                                 except Exception as lyrics_err:
+                                    import traceback
                                     print(f"[LYRICS] Error fetching lyrics: {lyrics_err}", flush=True)
+                                    traceback.print_exc()
                         
                         # Find cover file
                         cover_path = None

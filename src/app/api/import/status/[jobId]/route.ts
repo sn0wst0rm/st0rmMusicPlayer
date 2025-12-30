@@ -45,6 +45,11 @@ interface TrackMetadata {
     artworkTextColor2?: string;
     artworkTextColor3?: string;
     artworkTextColor4?: string;
+    // Lyrics metadata
+    audioLocale?: string;
+    lyricsHasWordSync?: boolean;
+    lyricsTranslations?: string;
+    lyricsPronunciations?: string;
 }
 
 interface TrackCompleteEvent {
@@ -158,7 +163,12 @@ async function insertTrackToLibrary(event: TrackCompleteEvent): Promise<{ albumI
             titleSort: metadata.titleSort || null,
             artistSort: metadata.artistSort || null,
             albumSort: metadata.albumSort || null,
-            composerSort: metadata.composerSort || null
+            composerSort: metadata.composerSort || null,
+            // Lyrics availability
+            audioLocale: metadata.audioLocale || null,
+            lyricsHasWordSync: metadata.lyricsHasWordSync || false,
+            lyricsTranslations: metadata.lyricsTranslations || null,
+            lyricsPronunciations: metadata.lyricsPronunciations || null
         },
         update: {
             title: metadata.title || undefined,
@@ -180,7 +190,12 @@ async function insertTrackToLibrary(event: TrackCompleteEvent): Promise<{ albumI
             titleSort: metadata.titleSort || undefined,
             artistSort: metadata.artistSort || undefined,
             albumSort: metadata.albumSort || undefined,
-            composerSort: metadata.composerSort || undefined
+            composerSort: metadata.composerSort || undefined,
+            // Lyrics availability
+            audioLocale: metadata.audioLocale || undefined,
+            lyricsHasWordSync: metadata.lyricsHasWordSync !== undefined ? metadata.lyricsHasWordSync : undefined,
+            lyricsTranslations: metadata.lyricsTranslations || undefined,
+            lyricsPronunciations: metadata.lyricsPronunciations || undefined
         }
     });
 
@@ -251,7 +266,9 @@ export async function GET(request: Request, { params }: RouteParams) {
                         cover_size: settings.coverSize,
                         save_cover: settings.saveCover,
                         language: settings.language,
-                        overwrite: settings.overwrite
+                        overwrite: settings.overwrite,
+                        lyrics_translation_langs: settings.lyricsTranslationLangs || '',
+                        lyrics_pronunciation_langs: settings.lyricsPronunciationLangs || ''
                     })
                 });
 

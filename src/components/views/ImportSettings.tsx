@@ -55,6 +55,9 @@ interface GamdlSettings {
     syncEnabled: boolean
     syncInterval: number
     autoSyncOnChange: boolean
+    // Multi-language lyrics settings
+    lyricsTranslationLangs: string
+    lyricsPronunciationLangs: string
 }
 
 export function ImportSettings({ open, onOpenChange, onSettingsUpdate }: ImportSettingsProps) {
@@ -104,6 +107,8 @@ export function ImportSettings({ open, onOpenChange, onSettingsUpdate }: ImportS
                 updateData.syncEnabled = settings.syncEnabled
                 updateData.syncInterval = settings.syncInterval
                 updateData.autoSyncOnChange = settings.autoSyncOnChange
+                updateData.lyricsTranslationLangs = settings.lyricsTranslationLangs
+                updateData.lyricsPronunciationLangs = settings.lyricsPronunciationLangs
             }
 
             // Only include cookies if user entered new ones
@@ -283,6 +288,79 @@ export function ImportSettings({ open, onOpenChange, onSettingsUpdate }: ImportS
                             </SelectContent>
                         </Select>
                     </div>
+
+                    {/* Lyrics Translation Languages */}
+                    {settings.lyricsFormat === 'ttml' && (
+                        <div className="space-y-2">
+                            <Label>Lyrics Translation Languages</Label>
+                            <div className="flex flex-wrap gap-2">
+                                {['en', 'it', 'es', 'fr', 'de', 'ja', 'ko', 'pt', 'zh'].map((lang) => {
+                                    const selected = (settings.lyricsTranslationLangs || '').split(',').filter(Boolean).includes(lang)
+                                    return (
+                                        <button
+                                            key={lang}
+                                            type="button"
+                                            onClick={() => {
+                                                const current = (settings.lyricsTranslationLangs || '').split(',').filter(Boolean)
+                                                const updated = selected
+                                                    ? current.filter(l => l !== lang)
+                                                    : [...current, lang]
+                                                setSettings({ ...settings, lyricsTranslationLangs: updated.join(',') })
+                                            }}
+                                            className={cn(
+                                                "px-3 py-1.5 text-xs font-medium rounded-full border transition-colors",
+                                                selected
+                                                    ? "bg-primary text-primary-foreground border-primary"
+                                                    : "bg-background border-border hover:bg-muted"
+                                            )}
+                                        >
+                                            {lang.toUpperCase()}
+                                        </button>
+                                    )
+                                })}
+                            </div>
+                            <p className="text-xs text-muted-foreground">
+                                Fetch translated lyrics for selected languages
+                            </p>
+                        </div>
+                    )}
+
+                    {/* Lyrics Pronunciation Languages */}
+                    {settings.lyricsFormat === 'ttml' && (
+                        <div className="space-y-2">
+                            <Label>Romanization (Pronunciation)</Label>
+                            <div className="flex flex-wrap gap-2">
+                                {['ja-Latn', 'ko-Latn', 'zh-Latn', 'ar-Latn', 'hi-Latn', 'th-Latn'].map((script) => {
+                                    const selected = (settings.lyricsPronunciationLangs || '').split(',').filter(Boolean).includes(script)
+                                    const displayName = script.split('-')[0].toUpperCase() + ' → Latin'
+                                    return (
+                                        <button
+                                            key={script}
+                                            type="button"
+                                            onClick={() => {
+                                                const current = (settings.lyricsPronunciationLangs || '').split(',').filter(Boolean)
+                                                const updated = selected
+                                                    ? current.filter(s => s !== script)
+                                                    : [...current, script]
+                                                setSettings({ ...settings, lyricsPronunciationLangs: updated.join(',') })
+                                            }}
+                                            className={cn(
+                                                "px-3 py-1.5 text-xs font-medium rounded-full border transition-colors",
+                                                selected
+                                                    ? "bg-primary text-primary-foreground border-primary"
+                                                    : "bg-background border-border hover:bg-muted"
+                                            )}
+                                        >
+                                            {displayName}
+                                        </button>
+                                    )
+                                })}
+                            </div>
+                            <p className="text-xs text-muted-foreground">
+                                Fetch romanized pronunciation for non-Latin scripts
+                            </p>
+                        </div>
+                    )}
 
                     {/* Cover Size */}
                     <div className="space-y-2">

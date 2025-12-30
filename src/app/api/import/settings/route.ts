@@ -59,7 +59,9 @@ export async function PUT(request: Request) {
             overwrite,
             syncEnabled,
             syncInterval,
-            autoSyncOnChange
+            autoSyncOnChange,
+            lyricsTranslationLangs,
+            lyricsPronunciationLangs
         } = body;
 
         // Build update data - only include fields that were provided
@@ -76,6 +78,8 @@ export async function PUT(request: Request) {
         if (syncEnabled !== undefined) updateData.syncEnabled = syncEnabled;
         if (syncInterval !== undefined) updateData.syncInterval = syncInterval;
         if (autoSyncOnChange !== undefined) updateData.autoSyncOnChange = autoSyncOnChange;
+        if (lyricsTranslationLangs !== undefined) updateData.lyricsTranslationLangs = lyricsTranslationLangs;
+        if (lyricsPronunciationLangs !== undefined) updateData.lyricsPronunciationLangs = lyricsPronunciationLangs;
 
         const settings = await db.gamdlSettings.upsert({
             where: { id: 'singleton' },

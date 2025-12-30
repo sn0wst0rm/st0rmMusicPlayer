@@ -84,6 +84,12 @@ model Track {
     lyricsPath String? // Path to synced .lrc file
     lyrics     String? // Plain text lyrics (embedded)
 
+    // Lyrics availability metadata
+    audioLocale          String? // Song's native language (e.g., "it", "en", "ko")
+    lyricsHasWordSync    Boolean @default(false) // Word-by-word sync available
+    lyricsTranslations   String? // Comma-separated available translation languages
+    lyricsPronunciations String? // Comma-separated available pronunciation scripts
+
     // Apple Music identifiers
     appleMusicId String? // Apple Music track ID (xid)
     storefront   String? // Apple Music storefront (e.g., "us")
@@ -130,21 +136,24 @@ model PlaylistTrack {
 
 // gamdl configuration stored in database
 model GamdlSettings {
-    id               String    @id @default("singleton")
-    cookies          String? // Netscape format cookies content
-    outputPath       String    @default("./music")
-    songCodec        String    @default("aac-legacy")
-    lyricsFormat     String    @default("ttml")
-    coverSize        Int       @default(1200)
-    saveCover        Boolean   @default(true)
-    language         String    @default("en-US")
-    overwrite        Boolean   @default(false)
+    id                       String    @id @default("singleton")
+    cookies                  String? // Netscape format cookies content
+    outputPath               String    @default("./music")
+    songCodec                String    @default("aac-legacy")
+    lyricsFormat             String    @default("ttml")
+    coverSize                Int       @default(1200)
+    saveCover                Boolean   @default(true)
+    language                 String    @default("en-US")
+    overwrite                Boolean   @default(false)
     // Playlist sync settings
-    syncEnabled      Boolean   @default(false) // Enable automatic playlist sync
-    syncInterval     Int       @default(60) // Sync interval in minutes (15, 30, 60, 360, 1440)
-    autoSyncOnChange Boolean   @default(true) // Auto-sync when changes detected, or just notify
-    lastSyncCheck    DateTime? // When last sync check was performed
-    updatedAt        DateTime  @updatedAt
+    syncEnabled              Boolean   @default(false) // Enable automatic playlist sync
+    syncInterval             Int       @default(60) // Sync interval in minutes (15, 30, 60, 360, 1440)
+    autoSyncOnChange         Boolean   @default(true) // Auto-sync when changes detected, or just notify
+    lastSyncCheck            DateTime? // When last sync check was performed
+    // Multi-language lyrics settings
+    lyricsTranslationLangs   String    @default("") // Comma-separated translation languages (it,en,ja)
+    lyricsPronunciationLangs String    @default("") // Comma-separated pronunciation scripts (it-Latn,en-Latn)
+    updatedAt                DateTime  @updatedAt
 }
 
 // Import job history for tracking downloads
