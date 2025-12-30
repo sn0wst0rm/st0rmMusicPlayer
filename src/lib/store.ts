@@ -75,6 +75,7 @@ interface PlayerState {
     isShuffling: boolean
     sidebarOpen: boolean
     queueOpen: boolean
+    lyricsOpen: boolean
     searchQuery: string
     currentView: 'artists' | 'albums' | 'songs' | 'search' | 'album' | 'playlist' | 'import'
     gamdlServiceOnline: boolean
@@ -103,6 +104,8 @@ interface PlayerState {
     toggleRepeat: () => void
     setQueueOpen: (open: boolean) => void
     toggleQueue: () => void
+    setLyricsOpen: (open: boolean) => void
+    toggleLyrics: () => void
     setLibrary: (library: Artist[]) => void
     setSelectedAlbum: (album: SelectedAlbum) => void
     clearSelectedAlbum: () => void
@@ -140,6 +143,7 @@ export const usePlayerStore = create<PlayerState>()(
             isShuffling: false,
             sidebarOpen: true,
             queueOpen: false,
+            lyricsOpen: false,
             searchQuery: "",
             currentView: 'songs',
             repeatMode: 'off',
@@ -340,6 +344,8 @@ export const usePlayerStore = create<PlayerState>()(
             }),
             setQueueOpen: (open) => set({ queueOpen: open }),
             toggleQueue: () => set((state) => ({ queueOpen: !state.queueOpen })),
+            setLyricsOpen: (open) => set({ lyricsOpen: open }),
+            toggleLyrics: () => set((state) => ({ lyricsOpen: !state.lyricsOpen })),
             setLibrary: (library) => set({ library }),
             setSelectedAlbum: (album) => set({ selectedAlbum: album, currentView: 'album' }),
             clearSelectedAlbum: () => set({ selectedAlbum: null }),

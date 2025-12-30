@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
 import { DynamicGradientBackground } from "@/components/ui/dynamic-gradient-background"
 import { extractColorsFromImage, getAppleMusicFallbackColors } from "@/lib/color-extraction"
-import { Play, Pause, SkipBack, SkipForward, Volume2, Shuffle, ListVideo, Repeat, Repeat1 } from "lucide-react"
+import { Play, Pause, SkipBack, SkipForward, Volume2, Shuffle, ListVideo, Repeat, Repeat1, Mic2 } from "lucide-react"
 import { cn } from "@/lib/utils"
 
 export function Player() {
@@ -26,6 +26,8 @@ export function Player() {
         sessionHistory,
         setQueueOpen,
         queueOpen,
+        lyricsOpen,
+        toggleLyrics,
         library,
         setSelectedAlbum
     } = usePlayerStore()
@@ -253,6 +255,9 @@ export function Player() {
 
                 {/* Volume */}
                 <div className="flex items-center justify-end gap-2 w-1/3">
+                    <Button variant="ghost" size="icon" onClick={toggleLyrics} className={cn("hover:text-primary", lyricsOpen && "text-primary")}>
+                        <Mic2 className="h-4 w-4" />
+                    </Button>
                     <Button variant="ghost" size="icon" onClick={() => setQueueOpen(!queueOpen)} className={cn("hover:text-primary", queueOpen && "text-primary")}>
                         <ListVideo className="h-4 w-4" />
                     </Button>

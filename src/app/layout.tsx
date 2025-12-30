@@ -8,6 +8,7 @@ import { ThemeProvider } from "@/components/theme-provider";
 import { ModeToggle } from "@/components/mode-toggle";
 import { ThemeColorManager } from "@/components/theme-color-manager";
 import { QueueSidebar } from "@/components/queue-sidebar";
+import { LyricsSidebar } from "@/components/lyrics-sidebar";
 import { Toaster } from "@/components/ui/sonner";
 
 export const metadata: Metadata = {
@@ -45,7 +46,7 @@ export default function RootLayout({
           <ThemeColorManager />
           <SidebarProvider className="h-full overflow-hidden">
             <AppSidebar />
-            <SidebarInset className="relative h-full overflow-hidden bg-background text-foreground block">
+            <SidebarInset className="relative h-full overflow-hidden bg-background text-foreground flex-1 min-w-0">
               <header className="absolute top-0 left-0 right-0 z-40 h-14 px-4 flex items-center gap-2 bg-background/60 backdrop-blur-md border-b transition-colors supports-[backdrop-filter]:bg-background/60">
                 <SidebarTrigger className="-ml-1" />
                 <Separator orientation="vertical" className="h-4" />
@@ -55,6 +56,7 @@ export default function RootLayout({
                 {children}
               </main>
             </SidebarInset>
+            <LyricsSidebar />
             <QueueSidebar />
           </SidebarProvider>
           <Player />
