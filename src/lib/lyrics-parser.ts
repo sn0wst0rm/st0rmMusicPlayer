@@ -162,15 +162,24 @@ export function parseTTML(content: string): ParsedLyrics {
 
         // Extract word-level timing from <span> elements if present
         const words: LyricsWord[] = []
-        const spanRegex = /<span[^>]*begin=["']([^"']+)["'][^>]*(?:end=["']([^"']+)["'])?[^>]*>([^<]*)<\/span>/gi
+        // Use a more flexible regex that captures the entire span tag, then extract attributes
+        const spanRegex = /<span([^>]*)>([^<]*)<\/span>/gi
 
         let spanMatch
         while ((spanMatch = spanRegex.exec(innerContent)) !== null) {
-            const wordBegin = spanMatch[1]
-            const wordEnd = spanMatch[2]
-            const wordText = spanMatch[3].trim()
+            const spanAttrs = spanMatch[1]
+            const wordText = spanMatch[2].trim()
 
             if (!wordText) continue
+
+            // Extract begin and end from attributes (handles any order)
+            const beginMatch = spanAttrs.match(/begin=["']([^"']+)["']/)
+            const endMatch = spanAttrs.match(/end=["']([^"']+)["']/)
+
+            const wordBegin = beginMatch ? beginMatch[1] : null
+            const wordEnd = endMatch ? endMatch[1] : null
+
+            if (!wordBegin) continue
 
             const wordTime = parseTTMLTimestamp(wordBegin)
             const wordEndTime = wordEnd ? parseTTMLTimestamp(wordEnd) ?? undefined : undefined
