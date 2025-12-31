@@ -8,7 +8,7 @@ import { cn } from "@/lib/utils"
 import { Mic2, MessageSquare } from "lucide-react"
 import { DynamicGradientBackground } from "@/components/ui/dynamic-gradient-background"
 import { extractColorsFromImage, getAppleMusicFallbackColors } from "@/lib/color-extraction"
-import type { LyricsLine, ParsedLyrics } from "@/lib/lyrics-parser"
+import type { LyricsLine, LyricsWord, ParsedLyrics } from "@/lib/lyrics-parser"
 
 // Apple Music-style breathing dots animation for instrumental pauses
 // Only shown when lyrics have endTime (TTML/SRT), not for LRC format
@@ -120,64 +120,158 @@ const LyricsLineComponent = memo(function LyricsLineComponent({
         // LATENCY COMPENSATION: Add 150ms to currentTime to compensate for system lag
         const compensatedTime = currentTime + 0.15
 
-        // Active line with word timing - continuous sliding highlight
-        return (
-            <span className="inline relative">
-                {line.words!.map((word, idx) => {
-                    const wordDuration = word.endTime ? word.endTime - word.time : 0.3
-                    const timeIntoWord = compensatedTime - word.time
+        // Helper to calculate syllable progress within a word
+        const getSyllableProgress = (word: LyricsWord, time: number): { overallProgress: number, currentSyllableIdx: number, syllableProgress: number } => {
+            if (!word.syllables || word.syllables.length <= 1) {
+                // Simple word without syllables
+                const duration = word.endTime ? word.endTime - word.time : 0.3
+                const timeInto = time - word.time
+                let progress = 0
+                if (time >= word.time) {
+                    if (word.endTime && time < word.endTime) {
+                        progress = Math.min(1, timeInto / duration)
+                    } else if (!word.endTime && timeInto < 0.3) {
+                        progress = Math.min(1, timeInto / 0.3)
+                    } else {
+                        progress = 1
+                    }
+                }
+                return { overallProgress: progress, currentSyllableIdx: 0, syllableProgress: progress }
+            }
 
-                    // Calculate progress: 0 = not started, 1 = complete
-                    let progress = 0
-                    if (compensatedTime >= word.time) {
-                        if (word.endTime && compensatedTime < word.endTime) {
-                            progress = Math.min(1, timeIntoWord / wordDuration)
-                        } else if (!word.endTime && timeIntoWord < 0.3) {
-                            progress = Math.min(1, timeIntoWord / 0.3)
-                        } else {
-                            progress = 1
-                        }
+            // Compound word with syllables - calculate which syllable we're in
+            const syllables = word.syllables
+            const wordStart = syllables[0].time
+            const wordEnd = syllables[syllables.length - 1].endTime || (syllables[syllables.length - 1].time + 0.3)
+            const totalDuration = wordEnd - wordStart
+
+            if (time < wordStart) {
+                return { overallProgress: 0, currentSyllableIdx: -1, syllableProgress: 0 }
+            }
+            if (time >= wordEnd) {
+                return { overallProgress: 1, currentSyllableIdx: syllables.length, syllableProgress: 1 }
+            }
+
+            // Find current syllable
+            let completedChars = 0
+            const totalChars = word.text.length
+
+            for (let i = 0; i < syllables.length; i++) {
+                const syl = syllables[i]
+                const sylEnd = syl.endTime || (syllables[i + 1]?.time || (syl.time + 0.3))
+                const sylChars = syl.text.length
+
+                if (time >= syl.time && time < sylEnd) {
+                    // We're in this syllable
+                    const sylDuration = sylEnd - syl.time
+                    const sylProgress = Math.min(1, (time - syl.time) / sylDuration)
+                    const charsRevealed = completedChars + sylProgress * sylChars
+                    return {
+                        overallProgress: charsRevealed / totalChars,
+                        currentSyllableIdx: i,
+                        syllableProgress: sylProgress
+                    }
+                }
+                completedChars += sylChars
+            }
+
+            return { overallProgress: 1, currentSyllableIdx: syllables.length, syllableProgress: 1 }
+        }
+
+        return (
+            <span className="inline">
+                {line.words!.map((word, idx) => {
+                    const { overallProgress, currentSyllableIdx, syllableProgress } = getSyllableProgress(word, compensatedTime)
+
+                    const isWordComplete = overallProgress >= 1
+                    const isWordActive = overallProgress > 0 && overallProgress < 1
+
+                    // Render compound word with syllables
+                    if (word.syllables && word.syllables.length > 1) {
+                        return (
+                            <span key={idx}>
+                                {word.syllables.map((syl, sylIdx) => {
+                                    const isSylComplete = sylIdx < currentSyllableIdx
+                                    const isSylActive = sylIdx === currentSyllableIdx
+                                    const isSylUpcoming = sylIdx > currentSyllableIdx
+
+                                    // Calculate fill percentage for this syllable
+                                    const fillPercent = isSylActive
+                                        ? syllableProgress * 100
+                                        : isSylComplete ? 100 : 0
+
+                                    // Dual-layer: base (visible) + overlay (bright, clipped)
+                                    return (
+                                        <span
+                                            key={sylIdx}
+                                            style={{
+                                                position: 'relative',
+                                                display: 'inline-block',
+                                            }}
+                                        >
+                                            {/* Base layer: dim for upcoming/active, bright only when complete */}
+                                            <span style={{
+                                                color: isSylComplete ? 'white' : 'rgba(255,255,255,0.5)',
+                                                filter: isSylComplete ? 'drop-shadow(0 0 3px rgba(255,255,255,0.9))' : 'none',
+                                            }}>
+                                                {syl.text}
+                                            </span>
+                                            {/* Overlay: glow + text revealed via polygon clip-path (extends left for full glow) */}
+                                            {isSylActive && (
+                                                <span
+                                                    style={{
+                                                        position: 'absolute',
+                                                        left: 0,
+                                                        top: 0,
+                                                        color: 'white',
+                                                        // Polygon extends 10px left to show glow on that side
+                                                        clipPath: `polygon(-10px -10px, ${fillPercent}% -10px, ${fillPercent}% 110%, -10px 110%)`,
+                                                        filter: 'drop-shadow(0 0 3px rgba(255,255,255,0.9))',
+                                                        pointerEvents: 'none',
+                                                    }}
+                                                >
+                                                    {syl.text}
+                                                </span>
+                                            )}
+                                        </span>
+                                    )
+                                })}
+                                {idx < line.words!.length - 1 ? ' ' : ''}
+                            </span>
+                        )
                     }
 
-                    const isWordComplete = progress >= 1
-                    const isWordActive = progress > 0 && progress < 1
-
-                    // Sliding glow using dual-layer:
-                    // 1. Base layer: visible text (bright when active/complete, dim when upcoming)
-                    // 2. Glow layer: TRANSPARENT text with text-shadow, masked with gradient for smooth edge
-                    const progressPercent = progress * 100
+                    // Simple word without syllables
+                    const fillPercent = isWordActive
+                        ? overallProgress * 100
+                        : isWordComplete ? 100 : 0
 
                     return (
-                        <span key={idx}>
+                        <React.Fragment key={idx}>
                             <span
                                 style={{
                                     position: 'relative',
                                     display: 'inline-block',
                                 }}
                             >
-                                {/* Base layer: always visible text */}
-                                <span
-                                    style={{
-                                        color: 'white',
-                                        opacity: isWordComplete || isWordActive ? 1 : 0.5,
-                                        textShadow: isWordComplete ? '0 0 6px rgba(255,255,255,0.7)' : 'none',
-                                    }}
-                                >
+                                {/* Base layer: dim for active, bright only when complete */}
+                                <span style={{
+                                    color: isWordComplete ? 'white' : 'rgba(255,255,255,0.5)',
+                                    filter: isWordComplete ? 'drop-shadow(0 0 3px rgba(255,255,255,0.9))' : 'none',
+                                }}>
                                     {word.text}
                                 </span>
-
-                                {/* Glow-only overlay: transparent text, gradient mask for smooth edge */}
+                                {/* Overlay: glow + text via polygon clip-path (extends left for full glow) */}
                                 {isWordActive && (
                                     <span
                                         style={{
                                             position: 'absolute',
-                                            top: 0,
                                             left: 0,
-                                            color: 'transparent',
-                                            textShadow: '0 0 12px rgba(255,255,255,1), 0 0 20px rgba(255,255,255,0.5)',
-                                            // Gradient mask: solid up to progress, then fade out
-                                            WebkitMaskImage: `linear-gradient(90deg, black ${progressPercent}%, transparent ${progressPercent + 5}%)`,
-                                            maskImage: `linear-gradient(90deg, black ${progressPercent}%, transparent ${progressPercent + 5}%)`,
+                                            top: 0,
+                                            color: 'white',
+                                            // Polygon extends 10px left to show glow on that side
+                                            clipPath: `polygon(-10px -10px, ${fillPercent}% -10px, ${fillPercent}% 110%, -10px 110%)`,
+                                            filter: 'drop-shadow(0 0 3px rgba(255,255,255,0.9))',
                                             pointerEvents: 'none',
                                         }}
                                     >
@@ -186,7 +280,7 @@ const LyricsLineComponent = memo(function LyricsLineComponent({
                                 )}
                             </span>
                             {idx < line.words!.length - 1 ? ' ' : ''}
-                        </span>
+                        </React.Fragment>
                     )
                 })}
             </span>

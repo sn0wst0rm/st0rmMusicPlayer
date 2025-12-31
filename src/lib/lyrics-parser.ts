@@ -4,10 +4,17 @@
  * Supports word-by-word timing from Apple Music syllable-lyrics
  */
 
+export interface LyricsSyllable {
+    time: number     // Start time in seconds
+    endTime?: number // End time in seconds
+    text: string     // The syllable text
+}
+
 export interface LyricsWord {
     time: number     // Start time in seconds
     endTime?: number // End time in seconds
-    text: string     // The word text
+    text: string     // The full word text
+    syllables?: LyricsSyllable[] // Per-syllable timing (for compound words)
 }
 
 export interface LyricsLine {
@@ -161,36 +168,110 @@ export function parseTTML(content: string): ParsedLyrics {
         if (time === null) continue
 
         // Extract word-level timing from <span> elements if present
-        const words: LyricsWord[] = []
-        // Use a more flexible regex that captures the entire span tag, then extract attributes
+        // Need to also detect spaces BETWEEN spans, not just inside them
+
+        // First, get all span matches with their positions
         const spanRegex = /<span([^>]*)>([^<]*)<\/span>/gi
+        const spanMatches: Array<{
+            attrs: string
+            text: string
+            start: number
+            end: number
+        }> = []
 
         let spanMatch
         while ((spanMatch = spanRegex.exec(innerContent)) !== null) {
-            const spanAttrs = spanMatch[1]
-            const wordText = spanMatch[2].trim()
+            spanMatches.push({
+                attrs: spanMatch[1],
+                text: spanMatch[2],
+                start: spanMatch.index,
+                end: spanMatch.index + spanMatch[0].length
+            })
+        }
 
-            if (!wordText) continue
+        // Now process matches and detect word boundaries by checking content between spans
+        const words: LyricsWord[] = []
+        let i = 0
 
-            // Extract begin and end from attributes (handles any order)
-            const beginMatch = spanAttrs.match(/begin=["']([^"']+)["']/)
-            const endMatch = spanAttrs.match(/end=["']([^"']+)["']/)
+        while (i < spanMatches.length) {
+            const currentSpan = spanMatches[i]
 
-            const wordBegin = beginMatch ? beginMatch[1] : null
-            const wordEnd = endMatch ? endMatch[1] : null
+            // Extract timing from this span
+            const beginMatch = currentSpan.attrs.match(/begin=["']([^"']+)["']/)
+            const endMatch = currentSpan.attrs.match(/end=["']([^"']+)["']/)
 
-            if (!wordBegin) continue
+            if (!beginMatch) {
+                i++
+                continue
+            }
 
-            const wordTime = parseTTMLTimestamp(wordBegin)
-            const wordEndTime = wordEnd ? parseTTMLTimestamp(wordEnd) ?? undefined : undefined
+            const startTime = parseTTMLTimestamp(beginMatch[1])
+            if (startTime === null) {
+                i++
+                continue
+            }
 
-            if (wordTime !== null) {
-                words.push({
+            // Collect connected syllables (no whitespace between them)
+            const connectedSyllables: LyricsSyllable[] = [{
+                time: startTime,
+                endTime: endMatch ? parseTTMLTimestamp(endMatch[1]) ?? undefined : undefined,
+                text: currentSpan.text
+            }]
+
+            // Look ahead for connected syllables
+            let j = i + 1
+            while (j < spanMatches.length) {
+                const prevSpan = spanMatches[j - 1]
+                const nextSpan = spanMatches[j]
+
+                // Check what's between the end of prev span and start of next span
+                const betweenContent = innerContent.substring(prevSpan.end, nextSpan.start)
+
+                // If there's whitespace or other non-tag content between, it's a word break
+                const hasWordBreak = /\s/.test(betweenContent) ||
+                    (betweenContent.length > 0 && !betweenContent.startsWith('<'))
+
+                if (hasWordBreak) break
+
+                // Extract timing for this syllable
+                const nextBeginMatch = nextSpan.attrs.match(/begin=["']([^"']+)["']/)
+                const nextEndMatch = nextSpan.attrs.match(/end=["']([^"']+)["']/)
+
+                if (nextBeginMatch) {
+                    const nextTime = parseTTMLTimestamp(nextBeginMatch[1])
+                    if (nextTime !== null) {
+                        connectedSyllables.push({
+                            time: nextTime,
+                            endTime: nextEndMatch ? parseTTMLTimestamp(nextEndMatch[1]) ?? undefined : undefined,
+                            text: nextSpan.text
+                        })
+                    }
+                }
+                j++
+            }
+
+            // Create the word from connected syllables
+            const wordText = connectedSyllables.map(s => s.text).join('')
+            const wordTime = connectedSyllables[0].time
+            const lastSyllable = connectedSyllables[connectedSyllables.length - 1]
+            const wordEndTime = lastSyllable.endTime
+
+            if (wordText.trim()) {
+                const word: LyricsWord = {
                     time: wordTime,
                     endTime: wordEndTime,
                     text: wordText
-                })
+                }
+
+                // Only add syllables array if there are multiple syllables
+                if (connectedSyllables.length > 1) {
+                    word.syllables = connectedSyllables
+                }
+
+                words.push(word)
             }
+
+            i = j
         }
 
         // Get full line text, stripping XML tags
