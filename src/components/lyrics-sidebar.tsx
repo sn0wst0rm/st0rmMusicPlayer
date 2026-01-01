@@ -12,71 +12,114 @@ import type { LyricsLine, LyricsWord, ParsedLyrics } from "@/lib/lyrics-parser"
 
 // Apple Music-style breathing dots animation for instrumental pauses
 // Only shown when lyrics have endTime (TTML/SRT), not for LRC format
-const FINAL_INHALE_DURATION = 1.0 // seconds for the final inhale effect
-const MIN_DOTS_DURATION = 1.5 // minimum seconds to show dots at all
+const INHALE_DURATION = 2.0 // Fixed duration for final inhale animation (seconds)
+const MIN_PAUSE_FOR_DOTS = 2.0 // Minimum pause duration to show dots at all
 
 const BreathingDots = memo(function BreathingDots({
-    progress, // 0-1 representing progress through the gap (excluding final inhale)
-    timeRemaining, // seconds remaining until next verse
+    breathingProgress, // 0-1 progress through breathing phase (before inhale)
+    isInhaling, // Whether we're in the final inhale phase
+    inhaleProgress, // 0-1 progress through inhale phase
     isPaused  // Whether playback is paused
 }: {
-    progress: number
-    timeRemaining: number
+    breathingProgress: number
+    isInhaling: boolean
+    inhaleProgress: number
     isPaused: boolean
 }) {
-    // Final inhale starts when time remaining is less than FINAL_INHALE_DURATION
-    const isFinalApproach = timeRemaining <= FINAL_INHALE_DURATION && timeRemaining > 0
-
-    // Calculate continuous color interpolation for each dot
-    const getOpacity = (dotIndex: number) => {
-        const fillPoint = (dotIndex + 1) / 3
+    // Calculate opacity for each dot based on breathing progress (progressive fill)
+    const getDotOpacity = (dotIndex: number) => {
+        // Each dot fills during its third of the breathing phase
         const fillStart = dotIndex / 3
+        const fillEnd = (dotIndex + 1) / 3
 
-        if (progress <= fillStart) return 0.2
-        if (progress >= fillPoint) return 0.85
+        if (breathingProgress <= fillStart) return 0.25 // Dim
+        if (breathingProgress >= fillEnd) return 1.0 // Fully lit
 
-        const localProgress = (progress - fillStart) / (1 / 3)
-        return 0.2 + localProgress * 0.65
+        // Smooth interpolation during this dot's fill phase
+        const localProgress = (breathingProgress - fillStart) / (1 / 3)
+        return 0.25 + localProgress * 0.75
     }
 
+    // Calculate scale based on phase
+    // During breathing: CSS handles the animation (1 → 1.15 → 1)
+    // During inhale: start from breathing peak (1.15) and grow to max, then shrink
+    const getScale = () => {
+        if (isPaused) return 1.0
+
+        if (isInhaling) {
+            // Inhale animation: start from breathing peak scale (1.15), grow then shrink
+            // First 70%: scale up from 1.15 to 1.44 (faster grow)
+            // Last 30%: scale down from 1.44 to 0 (fast shrink)
+            const startScale = 1.15 // Match breathing peak
+            const maxScale = 1.44 // Reduced by 10% from 1.6
+
+            if (inhaleProgress < 0.7) {
+                // Ease-in: slow start, accelerate
+                const growProgress = inhaleProgress / 0.7
+                const easedProgress = growProgress * growProgress // quadratic ease-in
+                return startScale + easedProgress * (maxScale - startScale)
+            } else {
+                // Fast shrink (30% of duration)
+                const shrinkProgress = (inhaleProgress - 0.7) / 0.3
+                return maxScale * (1 - shrinkProgress) // → 0
+            }
+        }
+
+        return 1.0 // Base scale, breathing animation handled by CSS
+    }
+
+    const scale = getScale()
+    // Opacity also fades during shrink phase for smoother disappearance
+    const opacity = isInhaling && inhaleProgress > 0.7 ? 1 - ((inhaleProgress - 0.7) / 0.3) : 1
+
     return (
-        <motion.div
-            className="py-2 px-4"
-            style={{ transformOrigin: 'left center' }}
-            initial={{ opacity: 0, scale: 0.8 }}
-            animate={{
-                opacity: 1,
-                scale: isPaused ? 1 : isFinalApproach
-                    ? [1, 1.3, 0] // Final inhale then disappear
-                    : [1, 1.1, 1], // Normal breathing
-            }}
-            exit={{ opacity: 0, scale: 1.3 }}
-            transition={{
-                opacity: { duration: 0.2 },
-                scale: isFinalApproach
-                    ? { duration: FINAL_INHALE_DURATION, ease: "easeOut" }
-                    : {
-                        duration: 2.5,
-                        repeat: isPaused ? 0 : Infinity,
+        <div
+            // Match text alignment: px-4 for padding, mx-2 for margin (same as lyrics lines)
+            // No motion on outer div - just positioning
+            className="py-2 px-4 mx-2"
+        >
+            {/* 
+              Inner container for dots with CENTER transform origin
+              This ensures the center dot stays in place during all scaling
+            */}
+            <motion.div
+                className="flex items-center gap-[4px] w-fit"
+                style={{ transformOrigin: 'center center' }}
+                initial={{ opacity: 0, scale: 0.8 }}
+                animate={{
+                    opacity: isPaused ? 1 : opacity,
+                    // Combine JS scale (for inhale) with CSS animation (for breathing)
+                    scale: isPaused ? 1 : (isInhaling ? scale : [1, 1.15, 1])
+                }}
+                exit={{ opacity: 0, scale: 0 }}
+                transition={isInhaling ? {
+                    // ZERO duration for instant updates (no stepping/lag)
+                    opacity: { duration: 0 },
+                    scale: { duration: 0 }
+                } : {
+                    opacity: { duration: 0.2 },
+                    scale: {
+                        duration: 2.5, // Slower breathing cycle
+                        repeat: Infinity,
                         ease: "easeInOut"
                     }
-            }}
-        >
-            <div className="flex items-center gap-[6px]">
+                }}
+            >
                 {[0, 1, 2].map((index) => (
                     <motion.div
                         key={index}
-                        className="w-[6px] h-[6px] rounded-full"
+                        // 50% bigger: 6px → 9px
+                        className="w-[9px] h-[9px] rounded-full bg-white"
                         animate={{
-                            backgroundColor: `hsl(var(--foreground) / ${getOpacity(index)})`
+                            opacity: getDotOpacity(index)
                         }}
                         transition={{
-                            backgroundColor: { duration: 0.1, ease: "linear" }
+                            opacity: { duration: 0.15, ease: "linear" }
                         }}
                     />
                 ))}
-            </div>
-        </motion.div>
+            </motion.div>
+        </div>
     )
 })
 
@@ -225,8 +268,8 @@ const LyricsLineComponent = memo(function LyricsLineComponent({
                                                         left: 0,
                                                         top: 0,
                                                         color: 'white',
-                                                        // Polygon extends 10px left to show glow on that side
-                                                        clipPath: `polygon(-10px -10px, ${fillPercent}% -10px, ${fillPercent}% 110%, -10px 110%)`,
+                                                        // Polygon extends 10px on both sides to show glow at edges
+                                                        clipPath: `polygon(-10px -10px, calc(${fillPercent}% + 10px) -10px, calc(${fillPercent}% + 10px) 110%, -10px 110%)`,
                                                         filter: 'drop-shadow(0 0 3px rgba(255,255,255,0.9))',
                                                         pointerEvents: 'none',
                                                     }}
@@ -270,8 +313,8 @@ const LyricsLineComponent = memo(function LyricsLineComponent({
                                             left: 0,
                                             top: 0,
                                             color: 'white',
-                                            // Polygon extends 10px left to show glow on that side
-                                            clipPath: `polygon(-10px -10px, ${fillPercent}% -10px, ${fillPercent}% 110%, -10px 110%)`,
+                                            // Polygon extends 10px on both sides to show glow at edges
+                                            clipPath: `polygon(-10px -10px, calc(${fillPercent}% + 10px) -10px, calc(${fillPercent}% + 10px) 110%, -10px 110%)`,
                                             filter: 'drop-shadow(0 0 3px rgba(255,255,255,0.9))',
                                             pointerEvents: 'none',
                                         }}
@@ -411,8 +454,9 @@ const LyricsPanelContent = memo(function LyricsPanelContent({
     const [currentTime, setCurrentTime] = useState(0)
     const [activeLine, setActiveLine] = useState(-1)
     const [isInGap, setIsInGap] = useState(false)
-    const [gapProgress, setGapProgress] = useState(0)
-    const [gapTimeRemaining, setGapTimeRemaining] = useState(0)
+    const [gapProgress, setGapProgress] = useState(0) // Progress through breathing phase (0-1)
+    const [isInhaling, setIsInhaling] = useState(false) // Whether in final inhale phase
+    const [inhaleProgress, setInhaleProgress] = useState(0) // Progress through inhale phase (0-1)
     const [isUserScrolling, setIsUserScrolling] = useState(false)
     const scrollContainerRef = useRef<HTMLDivElement>(null)
     const scrollTimeoutRef = useRef<NodeJS.Timeout | null>(null)
@@ -452,11 +496,25 @@ const LyricsPanelContent = memo(function LyricsPanelContent({
         setActiveLine(-1)
         setIsUserScrolling(false)
         isUserScrollingRef.current = false
-        // Reset scroll position
+        // Reset scroll position immediately
         if (scrollContainerRef.current) {
             scrollContainerRef.current.scrollTop = 0
         }
     }, [currentTrack?.id])
+
+    // Separate effect to reset scroll when lyrics actually load
+    // This handles page refresh where browser scroll restoration might override the initial reset
+    useEffect(() => {
+        if (lyrics && scrollContainerRef.current) {
+            // Use setTimeout to ensure this runs AFTER browser scroll restoration
+            const timeoutId = setTimeout(() => {
+                if (scrollContainerRef.current) {
+                    scrollContainerRef.current.scrollTop = 0
+                }
+            }, 50)
+            return () => clearTimeout(timeoutId)
+        }
+    }, [lyrics])
 
     // High-frequency time updates using requestAnimationFrame for smooth syllable animation
     // This provides ~60fps updates instead of audio timeupdate's ~4fps (250ms intervals)
@@ -533,33 +591,76 @@ const LyricsPanelContent = memo(function LyricsPanelContent({
             }
         }
 
-        // Check if we're in a gap before the next line
+        // Check if we're in a gap (intro, between lines, or outro)
         let inGap = false
-        let progress = 0
-        let timeRemaining = 0
+        let breathingProg = 0
+        let inhaleProg = 0
+        let inhaling = false
 
-        if (newActiveLine >= 0 && newActiveLine < lyrics.lines.length - 1) {
+        // Helper function to calculate dot animation state for a given pause
+        const calculateDotState = (pauseStart: number, pauseEnd: number) => {
+            const pauseDuration = pauseEnd - pauseStart
+
+            // Only show dots for pauses >= MIN_PAUSE_FOR_DOTS
+            if (pauseDuration < MIN_PAUSE_FOR_DOTS) return null
+
+            const timeIntoPause = currentTime - pauseStart
+            const timeRemaining = pauseEnd - currentTime
+
+            // We're in the pause if time is between pauseStart and pauseEnd
+            if (timeIntoPause >= 0 && timeRemaining > 0) {
+                // Calculate breathing phase duration (total - inhale)
+                const breathingDuration = Math.max(0, pauseDuration - INHALE_DURATION)
+
+                if (breathingDuration > 0 && timeIntoPause < breathingDuration) {
+                    // In breathing phase
+                    return {
+                        inGap: true,
+                        breathingProg: timeIntoPause / breathingDuration,
+                        inhaling: false,
+                        inhaleProg: 0
+                    }
+                } else {
+                    // In inhale phase
+                    const timeIntoInhale = timeIntoPause - breathingDuration
+                    return {
+                        inGap: true,
+                        breathingProg: 1,
+                        inhaling: true,
+                        inhaleProg: Math.min(1, timeIntoInhale / INHALE_DURATION)
+                    }
+                }
+            }
+            return null
+        }
+
+        // Check for INTRO gap (before first lyric)
+        if (newActiveLine === -1 && lyrics.lines.length > 0) {
+            const firstLine = lyrics.lines[0]
+            // Intro from time 0 to first line start
+            if (firstLine.time >= MIN_PAUSE_FOR_DOTS) {
+                const state = calculateDotState(0, firstLine.time)
+                if (state) {
+                    inGap = state.inGap
+                    breathingProg = state.breathingProg
+                    inhaling = state.inhaling
+                    inhaleProg = state.inhaleProg
+                }
+            }
+        }
+        // Check for gap BETWEEN lines
+        else if (newActiveLine >= 0 && newActiveLine < lyrics.lines.length - 1) {
             const currentLine = lyrics.lines[newActiveLine]
             const nextLine = lyrics.lines[newActiveLine + 1]
-            const gap = nextLine.time - currentLine.time
 
-            if (gap >= PAUSE_THRESHOLD) {
-                // Only show dots if we have endTime (TTML/SRT format)
-                if (currentLine.endTime) {
-                    const lineEndTime = currentLine.endTime - currentLine.time
-                    const timeIntoGap = currentTime - currentLine.time
-                    timeRemaining = nextLine.time - currentTime
-
-                    if (timeIntoGap > lineEndTime && timeRemaining >= MIN_DOTS_DURATION) {
-                        inGap = true
-                        const dotsStartTime = lineEndTime
-                        const effectiveDotsDuration = gap - dotsStartTime - FINAL_INHALE_DURATION
-                        if (effectiveDotsDuration > 0) {
-                            progress = Math.min(1, (timeIntoGap - dotsStartTime) / effectiveDotsDuration)
-                        } else {
-                            progress = 1
-                        }
-                    }
+            // Only show dots if we have endTime (TTML/SRT format, not LRC)
+            if (currentLine.endTime) {
+                const state = calculateDotState(currentLine.endTime, nextLine.time)
+                if (state) {
+                    inGap = state.inGap
+                    breathingProg = state.breathingProg
+                    inhaling = state.inhaling
+                    inhaleProg = state.inhaleProg
                 }
             }
         }
@@ -571,8 +672,9 @@ const LyricsPanelContent = memo(function LyricsPanelContent({
             setActiveLine(newActiveLine)
         }
         setIsInGap(inGap)
-        setGapProgress(progress)
-        setGapTimeRemaining(timeRemaining)
+        setGapProgress(breathingProg)
+        setIsInhaling(inhaling)
+        setInhaleProgress(inhaleProg)
     }, [currentTime, lyrics]) // REMOVED activeLine from dependencies
 
     // Auto-scroll to active line - position at top third, not center
@@ -703,13 +805,22 @@ const LyricsPanelContent = memo(function LyricsPanelContent({
                             WebkitMaskImage: 'linear-gradient(to bottom, black 0%, black 80%, transparent)'
                         }}
                     >
+                        {/* Show intro dots before first lyric */}
+                        {activeLine === -1 && isInGap && (
+                            <BreathingDots
+                                breathingProgress={gapProgress}
+                                isInhaling={isInhaling}
+                                inhaleProgress={inhaleProgress}
+                                isPaused={!isPlaying}
+                            />
+                        )}
                         {lyrics.lines.map((line, index) => (
                             <div key={index} data-line-index={index}>
                                 <LyricsLineComponent
                                     line={line}
                                     isActive={index === activeLine && !isInGap}
                                     isPast={index < activeLine}
-                                    distance={Math.abs(index - activeLine)}
+                                    distance={activeLine === -1 ? index + 1 : Math.abs(index - activeLine)}
                                     isUserScrolling={isUserScrolling}
                                     currentTime={currentTime}
                                     onClick={() => handleLineClick(line)}
@@ -717,8 +828,9 @@ const LyricsPanelContent = memo(function LyricsPanelContent({
                                 {/* Show breathing dots after the active line during a gap */}
                                 {index === activeLine && isInGap && (
                                     <BreathingDots
-                                        progress={gapProgress}
-                                        timeRemaining={gapTimeRemaining}
+                                        breathingProgress={gapProgress}
+                                        isInhaling={isInhaling}
+                                        inhaleProgress={inhaleProgress}
                                         isPaused={!isPlaying}
                                     />
                                 )}
