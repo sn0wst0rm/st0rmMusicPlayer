@@ -15,6 +15,7 @@ export interface LyricsWord {
     endTime?: number // End time in seconds
     text: string     // The full word text
     syllables?: LyricsSyllable[] // Per-syllable timing (for compound words)
+    transliteration?: string // Romanized pronunciation (e.g., "sa rang" for 사랑)
 }
 
 export interface LyricsLine {
@@ -23,6 +24,7 @@ export interface LyricsLine {
     text: string
     words?: LyricsWord[] // Word-level timing (optional, for syllable-lyrics)
     agent?: string // Singer/vocalist identifier (v1=main, v2=featured, v1000=both)
+    translation?: string // Translated text for this line
 }
 
 export interface ParsedLyrics {
@@ -30,6 +32,10 @@ export interface ParsedLyrics {
     lines: LyricsLine[]
     format: 'lrc' | 'srt' | 'ttml' | 'plain'
     hasWordTiming?: boolean // True if word-by-word timing is available
+    hasTranslation?: boolean // True if translations are available
+    hasTransliteration?: boolean // True if romanization is available
+    translationLanguage?: string // e.g., 'en-US'
+    transliterationLanguage?: string // e.g., 'ko-Latn'
 }
 
 /**
@@ -323,11 +329,112 @@ export function parseTTML(content: string): ParsedLyrics {
     // Sort by time
     lines.sort((a, b) => a.time - b.time)
 
+    // Parse translations section
+    // Format: <translations><translation type="subtitle" xml:lang="en-US"><text for="L##">...</text></translation></translations>
+    let hasTranslation = false
+    let translationLanguage: string | undefined
+
+    const translationsMatch = content.match(/<translations>([\s\S]*?)<\/translations>/)
+    if (translationsMatch) {
+        const translationsContent = translationsMatch[1]
+
+        // Get translation language
+        const langMatch = translationsContent.match(/<translation[^>]*xml:lang="([^"]+)"/)
+        if (langMatch) {
+            translationLanguage = langMatch[1]
+        }
+
+        // Extract all translation texts
+        const textRegex = /<text\s+for="([^"]+)"[^>]*>([^<]+)<\/text>/g
+        let textMatch
+        while ((textMatch = textRegex.exec(translationsContent)) !== null) {
+            const lineKey = textMatch[1] // e.g., "L61"
+            const translatedText = textMatch[2].trim()
+
+            // Find the corresponding line by itunes:key
+            // We need to search the original content for the line with this key
+            const lineKeyPattern = new RegExp(`<p[^>]*itunes:key="${lineKey}"[^>]*>`)
+            const lineWithKey = lines.find((line, index) => {
+                // Match by position - line keys are typically L1, L2, etc.
+                const keyNum = parseInt(lineKey.replace('L', ''), 10)
+                return index === keyNum - 1
+            })
+
+            if (lineWithKey) {
+                lineWithKey.translation = translatedText
+                hasTranslation = true
+            }
+        }
+    }
+
+    // Parse transliterations section
+    // Format: <transliterations><transliteration xml:lang="ko-Latn"><text for="L##"><span>...</span></text></transliteration></transliterations>
+    let hasTransliteration = false
+    let transliterationLanguage: string | undefined
+
+    const transliterationsMatch = content.match(/<transliterations>([\s\S]*?)<\/transliterations>/)
+    if (transliterationsMatch) {
+        const transliterationsContent = transliterationsMatch[1]
+
+        // Get transliteration language
+        const langMatch = transliterationsContent.match(/<transliteration[^>]*xml:lang="([^"]+)"/)
+        if (langMatch) {
+            transliterationLanguage = langMatch[1]
+        }
+
+        // Extract all transliteration texts with their spans
+        // Format: <text for="L##"><span begin="..." end="...">romanized text</span>...</text>
+        const textRegex = /<text\s+for="([^"]+)"[^>]*>([\s\S]*?)<\/text>/g
+        let textMatch
+        while ((textMatch = textRegex.exec(transliterationsContent)) !== null) {
+            const lineKey = textMatch[1]
+            const spansContent = textMatch[2]
+
+            // Find the corresponding line
+            const keyNum = parseInt(lineKey.replace('L', ''), 10)
+            const lineIndex = keyNum - 1
+            const line = lines[lineIndex]
+
+            if (line && line.words) {
+                // Parse spans with timing
+                const spanRegex = /<span[^>]*begin="([^"]+)"[^>]*end="([^"]+)"[^>]*>([^<]+)<\/span>/g
+                let spanMatch
+                const translitSpans: { time: number; endTime: number; text: string }[] = []
+
+                while ((spanMatch = spanRegex.exec(spansContent)) !== null) {
+                    const time = parseTTMLTimestamp(spanMatch[1])
+                    const endTime = parseTTMLTimestamp(spanMatch[2])
+                    const text = spanMatch[3].trim()
+
+                    if (time !== null && endTime !== null) {
+                        translitSpans.push({ time, endTime, text })
+                    }
+                }
+
+                // Match transliteration spans to words by timing
+                for (const word of line.words) {
+                    // Find transliteration span that matches this word's timing
+                    const matchingSpan = translitSpans.find(span =>
+                        Math.abs(span.time - word.time) < 0.1 // Allow 100ms tolerance
+                    )
+                    if (matchingSpan) {
+                        word.transliteration = matchingSpan.text
+                        hasTransliteration = true
+                    }
+                }
+            }
+        }
+    }
+
     return {
         synced: lines.length > 0,
         lines,
         format: 'ttml',
-        hasWordTiming: hasWordTiming && lines.some(l => l.words && l.words.length > 0)
+        hasWordTiming: hasWordTiming && lines.some(l => l.words && l.words.length > 0),
+        hasTranslation,
+        hasTransliteration,
+        translationLanguage,
+        transliterationLanguage
     }
 }
 
@@ -414,4 +521,48 @@ export function parseLyrics(content: string, filePath?: string): ParsedLyrics {
 
     // Default to plain text
     return parsePlainLyrics(content)
+}
+
+/**
+ * Merge translations and transliterations from a secondary file into the main lyrics
+ * Used when translations are stored in separate files (e.g., track.en.ttml)
+ */
+export function mergeTranslations(main: ParsedLyrics, translation: ParsedLyrics): ParsedLyrics {
+    // Clone main to avoid mutation
+    const merged: ParsedLyrics = {
+        ...main,
+        lines: main.lines.map(line => ({ ...line, words: line.words?.map(w => ({ ...w })) }))
+    }
+
+    // Merge translations from secondary file
+    for (let i = 0; i < translation.lines.length && i < merged.lines.length; i++) {
+        const transLine = translation.lines[i]
+        const mainLine = merged.lines[i]
+
+        // Copy translation if available
+        if (transLine.translation && !mainLine.translation) {
+            mainLine.translation = transLine.translation
+        }
+
+        // Copy transliterations to words if available
+        if (transLine.words && mainLine.words) {
+            for (let j = 0; j < transLine.words.length && j < mainLine.words.length; j++) {
+                if (transLine.words[j].transliteration && !mainLine.words[j].transliteration) {
+                    mainLine.words[j].transliteration = transLine.words[j].transliteration
+                }
+            }
+        }
+    }
+
+    // Update flags
+    if (translation.hasTranslation) {
+        merged.hasTranslation = true
+        merged.translationLanguage = merged.translationLanguage || translation.translationLanguage
+    }
+    if (translation.hasTransliteration) {
+        merged.hasTransliteration = true
+        merged.transliterationLanguage = merged.transliterationLanguage || translation.transliterationLanguage
+    }
+
+    return merged
 }

@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import db from '@/lib/db'
-import { parseLyrics } from '@/lib/lyrics-parser'
+import { parseLyrics, mergeTranslations } from '@/lib/lyrics-parser'
 import * as fs from 'fs/promises'
 import * as path from 'path'
 
@@ -34,7 +34,42 @@ export async function GET(request: Request, { params }: RouteParams) {
         if (track.lyricsPath) {
             try {
                 const content = await fs.readFile(track.lyricsPath, 'utf-8')
-                const parsed = parseLyrics(content, track.lyricsPath)
+                let parsed = parseLyrics(content, track.lyricsPath)
+
+                // Look for translation files (e.g., track.en.ttml, track.ja.ttml)
+                // Pattern: {basename}.{lang}.{ext}
+                if (track.lyricsPath.endsWith('.ttml')) {
+                    const dir = path.dirname(track.lyricsPath)
+                    const basename = path.basename(track.lyricsPath, '.ttml')
+
+                    try {
+                        const dirContents = await fs.readdir(dir)
+                        // Find translation files: {basename}.{lang}.ttml
+                        const translationFiles = dirContents.filter(file => {
+                            const match = file.match(new RegExp(`^${basename.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\.([a-z]{2}(?:-[A-Z]{2})?)\\.ttml$`))
+                            return match && file !== path.basename(track.lyricsPath!)
+                        })
+
+                        // Parse each translation file and merge
+                        for (const transFile of translationFiles) {
+                            const transPath = path.join(dir, transFile)
+                            try {
+                                const transContent = await fs.readFile(transPath, 'utf-8')
+                                const transParsed = parseLyrics(transContent, transPath)
+
+                                // Merge translations and transliterations into main lyrics
+                                if (transParsed.hasTranslation || transParsed.hasTransliteration) {
+                                    parsed = mergeTranslations(parsed, transParsed)
+                                }
+                            } catch {
+                                // Skip if translation file can't be read
+                            }
+                        }
+                    } catch {
+                        // Directory read failed, continue without translations
+                    }
+                }
+
                 return NextResponse.json(parsed)
             } catch {
                 console.warn(`[lyrics] Could not read lyrics file: ${track.lyricsPath}`)

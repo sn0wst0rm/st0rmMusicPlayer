@@ -5,10 +5,17 @@ import { memo, useCallback, useEffect, useRef, useState } from "react"
 import { usePlayerStore } from "@/lib/store"
 import { motion, AnimatePresence } from "motion/react"
 import { cn } from "@/lib/utils"
-import { Mic2, MessageSquare } from "lucide-react"
+import { Mic2, MessageSquare, Languages, Check } from "lucide-react"
 import { DynamicGradientBackground } from "@/components/ui/dynamic-gradient-background"
 import { extractColorsFromImage, getAppleMusicFallbackColors } from "@/lib/color-extraction"
 import type { LyricsLine, LyricsWord, ParsedLyrics } from "@/lib/lyrics-parser"
+import {
+    DropdownMenu,
+    DropdownMenuContent,
+    DropdownMenuCheckboxItem,
+    DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
+import { Button } from "@/components/ui/button"
 
 // Apple Music-style breathing dots animation for instrumental pauses
 // Only shown when lyrics have endTime (TTML/SRT), not for LRC format
@@ -133,7 +140,9 @@ const LyricsLineComponent = memo(function LyricsLineComponent({
     distance,
     isUserScrolling,
     currentTime,
-    onClick
+    onClick,
+    showTranslation,
+    showTransliteration
 }: {
     line: LyricsLine
     isActive: boolean
@@ -142,6 +151,8 @@ const LyricsLineComponent = memo(function LyricsLineComponent({
     isUserScrolling: boolean
     currentTime: number
     onClick: () => void
+    showTranslation?: boolean
+    showTransliteration?: boolean
 }) {
 
     // Progressive blur: active = 0, next/prev = low blur, then increasing
@@ -363,6 +374,86 @@ const LyricsLineComponent = memo(function LyricsLineComponent({
             )}
         >
             {renderContent()}
+
+            {/* Transliteration row (romanization) when enabled - with syllable highlighting */}
+            {showTransliteration && isActive && line.words && line.words.some(w => w.transliteration && w.transliteration.toLowerCase() !== w.text.toLowerCase()) && (
+                <div
+                    className="mt-1 opacity-70 font-normal"
+                    style={{ fontSize: '0.7em' }}
+                >
+                    {(() => {
+                        // LATENCY COMPENSATION: Add 150ms to currentTime
+                        const compensatedTime = currentTime + 0.15
+
+                        return line.words!.map((word, idx) => {
+                            // Skip if no transliteration or if it matches original (not foreign)
+                            if (!word.transliteration || word.transliteration.toLowerCase() === word.text.toLowerCase()) {
+                                return (
+                                    <React.Fragment key={idx}>
+                                        {word.text}
+                                        {idx < line.words!.length - 1 ? ' ' : ''}
+                                    </React.Fragment>
+                                )
+                            }
+
+                            // Calculate word progress for highlighting
+                            const duration = word.endTime ? word.endTime - word.time : 0.3
+                            const timeInto = compensatedTime - word.time
+                            let progress = 0
+                            if (compensatedTime >= word.time) {
+                                if (word.endTime && compensatedTime < word.endTime) {
+                                    progress = Math.min(1, timeInto / duration)
+                                } else if (!word.endTime && timeInto < 0.3) {
+                                    progress = Math.min(1, timeInto / 0.3)
+                                } else {
+                                    progress = 1
+                                }
+                            }
+
+                            const isWordComplete = progress >= 1
+                            const isWordActive = progress > 0 && progress < 1
+                            const fillPercent = progress * 100
+
+                            return (
+                                <React.Fragment key={idx}>
+                                    <span style={{ position: 'relative', display: 'inline-block' }}>
+                                        {/* Base layer */}
+                                        <span style={{
+                                            color: isWordComplete ? 'white' : 'rgba(255,255,255,0.5)',
+                                        }}>
+                                            {word.transliteration}
+                                        </span>
+                                        {/* Highlight overlay */}
+                                        {isWordActive && (
+                                            <span style={{
+                                                position: 'absolute',
+                                                left: 0,
+                                                top: 0,
+                                                color: 'white',
+                                                clipPath: `polygon(-10px -10px, calc(${fillPercent}% + 10px) -10px, calc(${fillPercent}% + 10px) 110%, -10px 110%)`,
+                                                pointerEvents: 'none',
+                                            }}>
+                                                {word.transliteration}
+                                            </span>
+                                        )}
+                                    </span>
+                                    {idx < line.words!.length - 1 ? ' ' : ''}
+                                </React.Fragment>
+                            )
+                        })
+                    })()}
+                </div>
+            )}
+
+            {/* Translation row at end of verse when enabled - skip if matches original */}
+            {showTranslation && line.translation && line.translation.toLowerCase() !== line.text.toLowerCase() && (
+                <div
+                    className="mt-1 opacity-50 font-normal italic"
+                    style={{ fontSize: '0.75em' }}
+                >
+                    {line.translation}
+                </div>
+            )}
         </div>
     )
 })
@@ -458,6 +549,8 @@ const LyricsPanelContent = memo(function LyricsPanelContent({
     const [isInhaling, setIsInhaling] = useState(false) // Whether in final inhale phase
     const [inhaleProgress, setInhaleProgress] = useState(0) // Progress through inhale phase (0-1)
     const [isUserScrolling, setIsUserScrolling] = useState(false)
+    const [showTranslation, setShowTranslation] = useState(true) // Show verse translations
+    const [showTransliteration, setShowTransliteration] = useState(true) // Show romanization
     const scrollContainerRef = useRef<HTMLDivElement>(null)
     const scrollTimeoutRef = useRef<NodeJS.Timeout | null>(null)
     const isAutoScrollingRef = useRef(false) // Flag to ignore scroll events caused by auto-scroll
@@ -776,15 +869,49 @@ const LyricsPanelContent = memo(function LyricsPanelContent({
 
     return (
         <>
-            {/* Header - just Lyrics title */}
+            {/* Header - Lyrics title and options */}
             <div className={cn(
-                "h-14 px-4 flex items-center flex-shrink-0 border-b transition-colors duration-500",
+                "h-14 px-4 flex items-center justify-between flex-shrink-0 border-b transition-colors duration-500",
                 isLight ? "text-black border-black/10" : "text-white border-black/20"
             )}>
                 <div className="flex items-center gap-2 text-base font-semibold">
                     <Mic2 className="h-4 w-4" />
                     Lyrics
                 </div>
+
+                {/* Translation options dropdown - only show if translations available */}
+                {lyrics && (lyrics.hasTranslation || lyrics.hasTransliteration) && (
+                    <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                            <Button
+                                variant="ghost"
+                                size="icon"
+                                className={cn(
+                                    "h-8 w-8 rounded-lg",
+                                    isLight ? "hover:bg-black/10" : "hover:bg-white/10"
+                                )}
+                            >
+                                <Languages className="h-4 w-4" />
+                            </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end" className="w-48">
+                            <DropdownMenuCheckboxItem
+                                checked={showTranslation}
+                                onCheckedChange={setShowTranslation}
+                                disabled={!lyrics.hasTranslation}
+                            >
+                                Show translations
+                            </DropdownMenuCheckboxItem>
+                            <DropdownMenuCheckboxItem
+                                checked={showTransliteration}
+                                onCheckedChange={setShowTransliteration}
+                                disabled={!lyrics.hasTransliteration}
+                            >
+                                Show pronunciations
+                            </DropdownMenuCheckboxItem>
+                        </DropdownMenuContent>
+                    </DropdownMenu>
+                )}
             </div>
 
             {/* Lyrics content */}
@@ -824,6 +951,8 @@ const LyricsPanelContent = memo(function LyricsPanelContent({
                                     isUserScrolling={isUserScrolling}
                                     currentTime={currentTime}
                                     onClick={() => handleLineClick(line)}
+                                    showTranslation={showTranslation && lyrics.hasTranslation}
+                                    showTransliteration={showTransliteration && lyrics.hasTransliteration}
                                 />
                                 {/* Show breathing dots after the active line during a gap */}
                                 {index === activeLine && isInGap && (
