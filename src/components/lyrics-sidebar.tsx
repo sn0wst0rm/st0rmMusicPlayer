@@ -106,7 +106,8 @@ const LyricsLineComponent = memo(function LyricsLineComponent({
 
     // Calculate opacity based on state
     const opacity = (isActive || isUserScrolling) ? 1 : (isPast ? 0.4 : 0.6)
-    const scale = isActive ? 1 : 0.95
+    // Inactive lines scaled down more noticeably since font-size no longer changes
+    const scale = isActive ? 1 : 0.85
 
     // Check if this line has word-level timing
     const hasWords = line.words && line.words.length > 0
@@ -287,25 +288,35 @@ const LyricsLineComponent = memo(function LyricsLineComponent({
         )
     }
 
+    // Determine alignment based on singer/agent
+    // v1 = main artist (left), v2 = featured artist (right), v1000 = both (left)
+    const isSecondaryArtist = line.agent === 'v2'
+
     return (
         <div
             onClick={onClick}
             style={{
                 opacity,
+                // Scale inactive lines DOWN instead of scaling active UP
+                // This prevents text reflow since dimensions don't change
                 transform: `scale(${scale})`,
                 filter: `blur(${blurAmount}px)`,
                 transition: 'all 0.4s cubic-bezier(0.25, 0.1, 0.25, 1)',
-                transformOrigin: 'left center',
+                transformOrigin: isSecondaryArtist ? 'right center' : 'left center',
+                textAlign: isSecondaryArtist ? 'right' : 'left',
             }}
             className={cn(
                 // Proper padding for text, margin for bounding box spacing from edge
                 "cursor-pointer px-4 py-2 mx-2 rounded-lg transition-colors",
                 "hover:bg-white/10",
+                // ALWAYS use the active text size - inactive lines are visually scaled down via transform
+                // This prevents text reflow/jumping when lines become active
+                "text-xl leading-relaxed font-bold",
                 isActive
-                    ? "text-white font-bold text-xl leading-relaxed drop-shadow-lg"
+                    ? "text-white drop-shadow-lg"
                     : isPast
-                        ? "text-white/50 text-base"
-                        : "text-white/70 text-base"
+                        ? "text-white/50"
+                        : "text-white/70"
             )}
         >
             {renderContent()}

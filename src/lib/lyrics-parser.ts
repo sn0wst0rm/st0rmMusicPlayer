@@ -22,6 +22,7 @@ export interface LyricsLine {
     endTime?: number // End time in seconds (optional, for SRT/TTML)
     text: string
     words?: LyricsWord[] // Word-level timing (optional, for syllable-lyrics)
+    agent?: string // Singer/vocalist identifier (v1=main, v2=featured, v1000=both)
 }
 
 export interface ParsedLyrics {
@@ -154,16 +155,26 @@ export function parseTTML(content: string): ParsedLyrics {
     // or with word-level timing using <span> elements
 
     // Extract all <p> elements with their full content (including nested elements)
-    const pRegex = /<p[^>]*begin=["']([^"']+)["'][^>]*(?:end=["']([^"']+)["'])?[^>]*>([\s\S]*?)<\/p>/gi
+    // Also capture the full tag attributes to extract ttm:agent
+    const pRegex = /<p([^>]*)begin=["']([^"']+)["']([^>]*)>([\s\S]*?)<\/p>/gi
 
     let match
     while ((match = pRegex.exec(content)) !== null) {
-        const beginStr = match[1]
-        const endStr = match[2]
-        const innerContent = match[3]
+        const attrsBefore = match[1]
+        const beginStr = match[2]
+        const attrsAfter = match[3]
+        const innerContent = match[4]
+        const fullAttrs = attrsBefore + attrsAfter
 
         const time = parseTTMLTimestamp(beginStr)
-        const endTime = endStr ? parseTTMLTimestamp(endStr) ?? undefined : undefined
+
+        // Extract end time
+        const endMatch = fullAttrs.match(/end=["']([^"']+)["']/)
+        const endTime = endMatch ? parseTTMLTimestamp(endMatch[1]) ?? undefined : undefined
+
+        // Extract ttm:agent for singer identification
+        const agentMatch = fullAttrs.match(/ttm:agent=["']([^"']+)["']/)
+        const agent = agentMatch ? agentMatch[1] : undefined
 
         if (time === null) continue
 
@@ -282,7 +293,7 @@ export function parseTTML(content: string): ParsedLyrics {
 
         if (!text) continue
 
-        const line: LyricsLine = { time, endTime, text }
+        const line: LyricsLine = { time, endTime, text, agent }
         if (words.length > 0) {
             line.words = words
         }
