@@ -26,6 +26,8 @@ import {
 } from "@/components/ui/popover"
 import * as React from "react"
 import { ListMusic, Mic2, Search as SearchIcon, Music, Import, Disc, Plus } from "lucide-react"
+import Link from "next/link"
+import { usePathname, useRouter } from "next/navigation"
 
 import { Lightning } from "@/components/icons/lightning"
 import { MarqueeText } from "@/components/ui/marquee-text"
@@ -34,15 +36,29 @@ import { searchLibraryLimited, SongSearchResult, AlbumSearchResult, ArtistSearch
 import { Album, Playlist } from "@/types/music"
 
 export function AppSidebar() {
+    const pathname = usePathname()
+    const router = useRouter()
     const {
-        searchQuery, setSearchQuery, currentView, setCurrentView, library, playTrack, setSelectedAlbum,
-        playlists, setPlaylists, navigateToPlaylist, selectedPlaylistId
+        searchQuery, setSearchQuery, library, playTrack, setSelectedAlbum,
+        playlists, setPlaylists, selectedPlaylistId
     } = usePlayerStore()
     const { setOpen, open } = useSidebar()
     const searchInputRef = React.useRef<React.ElementRef<typeof SidebarInput>>(null)
     const containerRef = React.useRef<HTMLDivElement>(null)
     const [openPopover, setOpenPopover] = React.useState(false)
     const [containerWidth, setContainerWidth] = React.useState(0)
+
+    // Determine current view from pathname
+    const currentView = React.useMemo(() => {
+        if (pathname === '/') return 'songs'
+        if (pathname === '/artists') return 'artists'
+        if (pathname === '/albums') return 'albums'
+        if (pathname.startsWith('/album/')) return 'album'
+        if (pathname.startsWith('/playlist/')) return 'playlist'
+        if (pathname === '/search') return 'search'
+        if (pathname === '/import') return 'import'
+        return 'songs'
+    }, [pathname])
 
     // Use advanced search with fuzzy matching and relevance scoring
     const searchResults = React.useMemo(() => {
@@ -93,11 +109,8 @@ export function AppSidebar() {
     }
 
     const handleGoToArtist = () => {
-        // We need a way to filter the Artist View or just switch to it?
-        // The current implementation of ArtistView just lists all.
-        // For now, switch to Artists view.
-        setCurrentView('artists')
-        // Ideally we would scroll to the artist.
+        // Switch to Artists view
+        router.push('/artists')
         setOpenPopover(false)
     }
 
@@ -108,6 +121,7 @@ export function AppSidebar() {
             tracks: album.tracks,
             artistName: album.artistName
         })
+        router.push(`/album/${album.id}`)
         setOpenPopover(false)
     }
 
@@ -121,7 +135,7 @@ export function AppSidebar() {
             if (response.ok) {
                 const newPlaylist: Playlist = await response.json()
                 setPlaylists([newPlaylist, ...playlists])
-                navigateToPlaylist(newPlaylist.id)
+                router.push(`/playlist/${newPlaylist.id}`)
             }
         } catch (error) {
             console.error('Failed to create playlist:', error)
@@ -166,7 +180,7 @@ export function AppSidebar() {
                                             onChange={(e) => setSearchQuery(e.target.value)}
                                             onKeyDown={(e) => {
                                                 if (e.key === 'Enter') {
-                                                    setCurrentView('search')
+                                                    router.push(`/search?q=${encodeURIComponent(searchQuery)}`)
                                                     setOpenPopover(false)
                                                 }
                                             }}
@@ -268,10 +282,12 @@ export function AppSidebar() {
                             <SidebarMenuItem>
                                 <SidebarMenuButton
                                     isActive={currentView === 'import'}
-                                    onClick={() => setCurrentView('import')}
+                                    asChild
                                 >
-                                    <Import />
-                                    <span>Import</span>
+                                    <Link href="/import">
+                                        <Import />
+                                        <span>Import</span>
+                                    </Link>
                                 </SidebarMenuButton>
                             </SidebarMenuItem>
                         </SidebarMenu>
@@ -284,21 +300,27 @@ export function AppSidebar() {
                         <SidebarMenu>
 
                             <SidebarMenuItem>
-                                <SidebarMenuButton isActive={currentView === 'artists'} onClick={() => setCurrentView('artists')}>
-                                    <Mic2 />
-                                    <span>Artists</span>
+                                <SidebarMenuButton isActive={currentView === 'artists'} asChild>
+                                    <Link href="/artists">
+                                        <Mic2 />
+                                        <span>Artists</span>
+                                    </Link>
                                 </SidebarMenuButton>
                             </SidebarMenuItem>
                             <SidebarMenuItem>
-                                <SidebarMenuButton isActive={currentView === 'albums'} onClick={() => setCurrentView('albums')}>
-                                    <ListMusic />
-                                    <span>Albums</span>
+                                <SidebarMenuButton isActive={currentView === 'albums'} asChild>
+                                    <Link href="/albums">
+                                        <ListMusic />
+                                        <span>Albums</span>
+                                    </Link>
                                 </SidebarMenuButton>
                             </SidebarMenuItem>
                             <SidebarMenuItem>
-                                <SidebarMenuButton isActive={currentView === 'songs'} onClick={() => setCurrentView('songs')}>
-                                    <Music />
-                                    <span>Songs</span>
+                                <SidebarMenuButton isActive={currentView === 'songs'} asChild>
+                                    <Link href="/">
+                                        <Music />
+                                        <span>Songs</span>
+                                    </Link>
                                 </SidebarMenuButton>
                             </SidebarMenuItem>
                         </SidebarMenu>
@@ -329,27 +351,29 @@ export function AppSidebar() {
                                     <SidebarMenuItem key={playlist.id}>
                                         <SidebarMenuButton
                                             isActive={currentView === 'playlist' && selectedPlaylistId === playlist.id}
-                                            onClick={() => navigateToPlaylist(playlist.id)}
+                                            asChild
                                         >
-                                            {playlist.coverPath || playlist.artworkUrl ? (
-                                                <div className="relative size-4 rounded overflow-hidden flex-shrink-0">
-                                                    <img
-                                                        src={playlist.coverPath
-                                                            ? `/api/playlist-cover/${encodeURIComponent(playlist.coverPath)}`
-                                                            : playlist.artworkUrl!
-                                                        }
-                                                        alt=""
-                                                        className="w-full h-full object-cover"
-                                                        onError={(e) => {
-                                                            // Fall back to icon on error
-                                                            e.currentTarget.parentElement!.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" class="size-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15V6"/><path d="M18.5 18a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5Z"/><path d="M12 12H3"/><path d="M16 6H3"/><path d="M12 18H3"/></svg>'
-                                                        }}
-                                                    />
-                                                </div>
-                                            ) : (
-                                                <ListMusic className="size-4" />
-                                            )}
-                                            <span className="truncate">{playlist.name}</span>
+                                            <Link href={`/playlist/${playlist.id}`}>
+                                                {playlist.coverPath || playlist.artworkUrl ? (
+                                                    <div className="relative size-4 rounded overflow-hidden flex-shrink-0">
+                                                        <img
+                                                            src={playlist.coverPath
+                                                                ? `/api/playlist-cover/${encodeURIComponent(playlist.coverPath)}`
+                                                                : playlist.artworkUrl!
+                                                            }
+                                                            alt=""
+                                                            className="w-full h-full object-cover"
+                                                            onError={(e) => {
+                                                                // Fall back to icon on error
+                                                                e.currentTarget.parentElement!.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" class="size-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15V6"/><path d="M18.5 18a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5Z"/><path d="M12 12H3"/><path d="M16 6H3"/><path d="M12 18H3"/></svg>'
+                                                            }}
+                                                        />
+                                                    </div>
+                                                ) : (
+                                                    <ListMusic className="size-4" />
+                                                )}
+                                                <span className="truncate">{playlist.name}</span>
+                                            </Link>
                                         </SidebarMenuButton>
                                     </SidebarMenuItem>
                                 ))
