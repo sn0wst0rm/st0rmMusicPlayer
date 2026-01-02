@@ -36,6 +36,7 @@ export interface ParsedLyrics {
     hasTransliteration?: boolean // True if romanization is available
     translationLanguage?: string // e.g., 'en-US'
     transliterationLanguage?: string // e.g., 'ko-Latn'
+    songwriters?: string[] // List of songwriters/composers
 }
 
 /**
@@ -426,6 +427,18 @@ export function parseTTML(content: string): ParsedLyrics {
         }
     }
 
+    // Parse songwriters from metadata
+    // Format: <songwriters><songwriter>Name</songwriter>...</songwriters>
+    let songwriters: string[] = []
+    const songwritersMatch = content.match(/<songwriters>([\s\S]*?)<\/songwriters>/)
+    if (songwritersMatch) {
+        const songwriterRegex = /<songwriter>([^<]+)<\/songwriter>/g
+        let swMatch
+        while ((swMatch = songwriterRegex.exec(songwritersMatch[1])) !== null) {
+            songwriters.push(swMatch[1].trim())
+        }
+    }
+
     return {
         synced: lines.length > 0,
         lines,
@@ -434,7 +447,8 @@ export function parseTTML(content: string): ParsedLyrics {
         hasTranslation,
         hasTransliteration,
         translationLanguage,
-        transliterationLanguage
+        transliterationLanguage,
+        songwriters: songwriters.length > 0 ? songwriters : undefined
     }
 }
 

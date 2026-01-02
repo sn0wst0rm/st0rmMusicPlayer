@@ -19,7 +19,7 @@ import { Button } from "@/components/ui/button"
 
 // Apple Music-style breathing dots animation for instrumental pauses
 // Only shown when lyrics have endTime (TTML/SRT), not for LRC format
-const INHALE_DURATION = 2.0 // Fixed duration for final inhale animation (seconds)
+const INHALE_DURATION = 1.5 // Fixed duration for final inhale animation (seconds)
 const MIN_PAUSE_FOR_DOTS = 2.0 // Minimum pause duration to show dots at all
 
 const BreathingDots = memo(function BreathingDots({
@@ -54,20 +54,21 @@ const BreathingDots = memo(function BreathingDots({
         if (isPaused) return 1.0
 
         if (isInhaling) {
-            // Inhale animation: start from breathing peak scale (1.15), grow then shrink
-            // First 70%: scale up from 1.15 to 1.44 (faster grow)
-            // Last 30%: scale down from 1.44 to 0 (fast shrink)
+            // Inhale animation: start from breathing peak scale (1.15) and grow to max, then shrink
+            // First 85%: scale up from 1.15 to 1.44 (~1.275s)
+            // Last 15%: scale down from 1.44 to 0 (~0.225s)
             const startScale = 1.15 // Match breathing peak
             const maxScale = 1.44 // Reduced by 10% from 1.6
+            const growPhase = 0.85 // 85% for grow, 15% for deflate
 
-            if (inhaleProgress < 0.7) {
+            if (inhaleProgress < growPhase) {
                 // Ease-in: slow start, accelerate
-                const growProgress = inhaleProgress / 0.7
+                const growProgress = inhaleProgress / growPhase
                 const easedProgress = growProgress * growProgress // quadratic ease-in
                 return startScale + easedProgress * (maxScale - startScale)
             } else {
-                // Fast shrink (30% of duration)
-                const shrinkProgress = (inhaleProgress - 0.7) / 0.3
+                // Fast shrink (7% of duration = ~0.1s)
+                const shrinkProgress = (inhaleProgress - growPhase) / (1 - growPhase)
                 return maxScale * (1 - shrinkProgress) // → 0
             }
         }
@@ -375,73 +376,63 @@ const LyricsLineComponent = memo(function LyricsLineComponent({
         >
             {renderContent()}
 
-            {/* Transliteration row (romanization) when enabled - with syllable highlighting */}
-            {showTransliteration && isActive && line.words && line.words.some(w => w.transliteration && w.transliteration.toLowerCase() !== w.text.toLowerCase()) && (
+            {/* Transliteration row (romanization) when enabled - visible on all verses */}
+            {showTransliteration && line.words && line.words.some(w => w.transliteration && w.transliteration.toLowerCase() !== w.text.toLowerCase()) && (
                 <div
                     className="mt-1 opacity-70 font-normal"
                     style={{ fontSize: '0.7em' }}
                 >
-                    {(() => {
-                        // LATENCY COMPENSATION: Add 150ms to currentTime
-                        const compensatedTime = currentTime + 0.15
-
-                        return line.words!.map((word, idx) => {
-                            // Skip if no transliteration or if it matches original (not foreign)
-                            if (!word.transliteration || word.transliteration.toLowerCase() === word.text.toLowerCase()) {
+                    {isActive ? (
+                        // Active verse: show with syllable highlighting
+                        (() => {
+                            const compensatedTime = currentTime + 0.15
+                            return line.words!.map((word, idx) => {
+                                if (!word.transliteration || word.transliteration.toLowerCase() === word.text.toLowerCase()) {
+                                    return <React.Fragment key={idx}>{word.text}{idx < line.words!.length - 1 ? ' ' : ''}</React.Fragment>
+                                }
+                                const duration = word.endTime ? word.endTime - word.time : 0.3
+                                const timeInto = compensatedTime - word.time
+                                let progress = 0
+                                if (compensatedTime >= word.time) {
+                                    if (word.endTime && compensatedTime < word.endTime) {
+                                        progress = Math.min(1, timeInto / duration)
+                                    } else if (!word.endTime && timeInto < 0.3) {
+                                        progress = Math.min(1, timeInto / 0.3)
+                                    } else {
+                                        progress = 1
+                                    }
+                                }
+                                const isWordComplete = progress >= 1
+                                const isWordActive = progress > 0 && progress < 1
+                                const fillPercent = progress * 100
                                 return (
                                     <React.Fragment key={idx}>
-                                        {word.text}
+                                        <span style={{ position: 'relative', display: 'inline-block' }}>
+                                            <span style={{ color: isWordComplete ? 'white' : 'rgba(255,255,255,0.5)' }}>{word.transliteration}</span>
+                                            {isWordActive && (
+                                                <span style={{
+                                                    position: 'absolute', left: 0, top: 0, color: 'white',
+                                                    clipPath: `polygon(-10px -10px, calc(${fillPercent}% + 10px) -10px, calc(${fillPercent}% + 10px) 110%, -10px 110%)`,
+                                                    pointerEvents: 'none',
+                                                }}>{word.transliteration}</span>
+                                            )}
+                                        </span>
                                         {idx < line.words!.length - 1 ? ' ' : ''}
                                     </React.Fragment>
                                 )
-                            }
-
-                            // Calculate word progress for highlighting
-                            const duration = word.endTime ? word.endTime - word.time : 0.3
-                            const timeInto = compensatedTime - word.time
-                            let progress = 0
-                            if (compensatedTime >= word.time) {
-                                if (word.endTime && compensatedTime < word.endTime) {
-                                    progress = Math.min(1, timeInto / duration)
-                                } else if (!word.endTime && timeInto < 0.3) {
-                                    progress = Math.min(1, timeInto / 0.3)
-                                } else {
-                                    progress = 1
-                                }
-                            }
-
-                            const isWordComplete = progress >= 1
-                            const isWordActive = progress > 0 && progress < 1
-                            const fillPercent = progress * 100
-
-                            return (
-                                <React.Fragment key={idx}>
-                                    <span style={{ position: 'relative', display: 'inline-block' }}>
-                                        {/* Base layer */}
-                                        <span style={{
-                                            color: isWordComplete ? 'white' : 'rgba(255,255,255,0.5)',
-                                        }}>
-                                            {word.transliteration}
-                                        </span>
-                                        {/* Highlight overlay */}
-                                        {isWordActive && (
-                                            <span style={{
-                                                position: 'absolute',
-                                                left: 0,
-                                                top: 0,
-                                                color: 'white',
-                                                clipPath: `polygon(-10px -10px, calc(${fillPercent}% + 10px) -10px, calc(${fillPercent}% + 10px) 110%, -10px 110%)`,
-                                                pointerEvents: 'none',
-                                            }}>
-                                                {word.transliteration}
-                                            </span>
-                                        )}
-                                    </span>
-                                    {idx < line.words!.length - 1 ? ' ' : ''}
-                                </React.Fragment>
-                            )
-                        })
-                    })()}
+                            })
+                        })()
+                    ) : (
+                        // Inactive verses: plain text, no highlighting
+                        line.words!.map((word, idx) => (
+                            <React.Fragment key={idx}>
+                                {word.transliteration && word.transliteration.toLowerCase() !== word.text.toLowerCase()
+                                    ? word.transliteration
+                                    : word.text}
+                                {idx < line.words!.length - 1 ? ' ' : ''}
+                            </React.Fragment>
+                        ))
+                    )}
                 </div>
             )}
 
@@ -481,19 +472,53 @@ const LyricsPlaceholder = memo(function LyricsPlaceholder({
             )}
             {state === 'no-lyrics' && (
                 <>
-                    <div className="relative mb-3 opacity-30">
-                        {/* Base bubble using MessageSquare (empty) */}
-                        <MessageSquare className="h-14 w-14" strokeWidth={1.5} />
+                    <div className="mb-4 opacity-40">
+                        {/* Adapted from user-provided SVG - using mask to avoid overlap */}
+                        <svg
+                            width="64"
+                            height="64"
+                            viewBox="0 0 48 48"
+                            fill="none"
+                            stroke="currentColor"
+                            strokeWidth="2"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                        >
+                            {/* Define mask that cuts out the slash area */}
+                            <defs>
+                                <mask id="slashMask">
+                                    {/* White = visible, black = hidden */}
+                                    <rect x="0" y="0" width="48" height="48" fill="white" />
+                                    {/* Cut out the slash path */}
+                                    <line x1="0" y1="48" x2="48" y2="0" stroke="black" strokeWidth="4" strokeLinecap="round" />
+                                </mask>
+                            </defs>
 
-                        {/* Big Centered Quotes */}
-                        <div className="absolute inset-0 flex items-center justify-center pb-3 pl-0.5">
-                            <span className="text-4xl font-black leading-none select-none font-serif">&rdquo;</span>
-                        </div>
+                            {/* Icon elements with mask applied */}
+                            <g mask="url(#slashMask)">
+                                {/* Speech bubble outline */}
+                                <path
+                                    d="M 5 13 C 5 9.134 8.134 6 12 6 L 36 6 C 39.866 6 43 9.134 43 13 L 43 30 C 43 33.866 39.866 37 36 37 L 25.407 37 L 18.978 42.633 C 17.5 43.9 15 42.8 15 40.8 L 15 37 L 12 37 C 8.134 37 5 33.866 5 30 Z"
+                                    fill="none"
+                                />
 
-                        {/* Bolder, Longer Slash */}
-                        <div className="absolute inset-0 flex items-center justify-center">
-                            <div className="w-[130%] h-[3px] bg-current -rotate-45 origin-center rounded-full" />
-                        </div>
+                                {/* Left quote */}
+                                <path
+                                    d="M 17.74 27 C 17.33 27 17 26.67 17 26.27 C 17 25.86 17.33 25.54 17.74 25.54 C 19.3 25.54 20.45 24.66 21.16 23.38 C 20.66 23.66 20.1 23.83 19.49 23.83 C 17.61 23.83 16.08 22.3 16.08 20.41 C 16.08 18.53 17.46 17 19.35 17 C 20.66 17 21.73 17.93 22.36 19 C 22.6 19.41 23 20.28 23 21.54 C 23 24.63 20.83 27 17.74 27 Z"
+                                    fill="currentColor"
+                                    stroke="none"
+                                />
+                                {/* Right quote */}
+                                <path
+                                    d="M 26.74 27 C 26.33 27 26 26.67 26 26.27 C 26 25.86 26.33 25.54 26.74 25.54 C 28.3 25.54 29.45 24.66 30.16 23.38 C 29.66 23.66 29.1 23.83 28.49 23.83 C 26.61 23.83 25.08 22.3 25.08 20.41 C 25.08 18.53 26.46 17 28.35 17 C 29.66 17 30.73 17.93 31.36 19 C 31.6 19.41 32 20.28 32 21.54 C 32 24.63 29.83 27 26.74 27 Z"
+                                    fill="currentColor"
+                                    stroke="none"
+                                />
+                            </g>
+
+                            {/* Diagonal slash - drawn on top, no overlap thanks to mask */}
+                            <line x1="2" y1="46" x2="46" y2="2" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" />
+                        </svg>
                     </div>
                     <span className="text-sm text-center">
                         No lyrics available
@@ -654,11 +679,23 @@ const LyricsPanelContent = memo(function LyricsPanelContent({
         }
 
         // Calculate the candidate active line based on current time
+        // Priority: use endTime to detect when current line is FINISHED
         let candidateLine = -1
         for (let i = lyrics.lines.length - 1; i >= 0; i--) {
             if (currentTime >= lyrics.lines[i].time) {
                 candidateLine = i
                 break
+            }
+        }
+
+        // If the current line has an endTime and we've passed it, 
+        // advance to the next line early so the transition animation 
+        // completes before the next verse actually starts
+        if (candidateLine >= 0 && candidateLine < lyrics.lines.length - 1) {
+            const currentLine = lyrics.lines[candidateLine]
+            if (currentLine.endTime && currentTime >= currentLine.endTime) {
+                // Current line has ended, advance to next
+                candidateLine = candidateLine + 1
             }
         }
 
@@ -787,19 +824,19 @@ const LyricsPanelContent = memo(function LyricsPanelContent({
             // Only scroll if we need to move more than a small threshold
             if (Math.abs(offsetTop) < 5) return
 
-            // Set flag so we don't treat this as user interaction
-            // Use a longer immunity period to cover the entire smooth scroll animation
+            // Set flag BEFORE scrolling so handleScroll ignores this
             isAutoScrollingRef.current = true
+
             container.scrollTo({
                 top: container.scrollTop + offsetTop,
                 behavior: 'smooth'
             })
 
-            // Reset flag after animation roughly finishes
-            // Extended to 1500ms to fully cover smooth scroll duration
+            // Reset flag after smooth scroll animation completes (~400-600ms typically)
+            // Use longer timeout to fully cover the animation
             setTimeout(() => {
                 isAutoScrollingRef.current = false
-            }, 1500)
+            }, 800)
         }
     }, [activeLine])
 
@@ -926,10 +963,12 @@ const LyricsPanelContent = memo(function LyricsPanelContent({
                     <div
                         ref={scrollContainerRef}
                         onScroll={handleScroll}
-                        className="h-full overflow-y-auto overflow-x-hidden scroll-smooth pb-32 pt-4"
+                        className="h-full overflow-y-auto overflow-x-hidden scroll-smooth pb-32 pt-4 scrollbar-hide"
                         style={{
                             maskImage: 'linear-gradient(to bottom, black 0%, black 80%, transparent)',
-                            WebkitMaskImage: 'linear-gradient(to bottom, black 0%, black 80%, transparent)'
+                            WebkitMaskImage: 'linear-gradient(to bottom, black 0%, black 80%, transparent)',
+                            scrollbarWidth: 'none', // Firefox
+                            msOverflowStyle: 'none', // IE/Edge
                         }}
                     >
                         {/* Show intro dots before first lyric */}
@@ -965,6 +1004,23 @@ const LyricsPanelContent = memo(function LyricsPanelContent({
                                 )}
                             </div>
                         ))}
+
+                        {/* Songwriter credits at end of lyrics */}
+                        {lyrics.songwriters && lyrics.songwriters.length > 0 && (
+                            <div className={cn(
+                                "mx-6 mt-8 pt-4 border-t transition-colors duration-500",
+                                isLight ? "border-black/20" : "border-white/20"
+                            )}>
+                                <p className={cn(
+                                    "text-sm font-normal",
+                                    isLight ? "text-black/50" : "text-white/50"
+                                )}>
+                                    <span className="font-medium">Written by:</span>{' '}
+                                    {lyrics.songwriters.join(', ')}
+                                </p>
+                            </div>
+                        )}
+
                         <div className="h-48" />
                     </div>
                 )}
