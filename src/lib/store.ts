@@ -86,6 +86,7 @@ interface PlayerState {
     targetArtist: string | null  // Artist name to scroll to
     playlists: Playlist[]
     selectedPlaylistId: string | null
+    playbackProgress: number  // Last known playback position in seconds (for resume after reload)
 
     // Actions
     setIsPlaying: (isPlaying: boolean) => void
@@ -116,6 +117,7 @@ interface PlayerState {
     setPlaylists: (playlists: Playlist[]) => void
     setSelectedPlaylistId: (id: string | null) => void
     navigateToPlaylist: (id: string) => void
+    setPlaybackProgress: (progress: number) => void
 }
 
 // Helper to add track to playback history
@@ -154,6 +156,7 @@ export const usePlayerStore = create<PlayerState>()(
             playlists: [],
             selectedPlaylistId: null,
             gamdlServiceOnline: false,
+            playbackProgress: 0,
 
             setIsPlaying: (isPlaying) => set({ isPlaying }),
             setVolume: (volume) => set({ volume }),
@@ -356,13 +359,28 @@ export const usePlayerStore = create<PlayerState>()(
             setPlaylists: (playlists) => set({ playlists }),
             setSelectedPlaylistId: (id) => set({ selectedPlaylistId: id }),
             setGamdlServiceOnline: (online) => set({ gamdlServiceOnline: online }),
-            navigateToPlaylist: (id) => set({ currentView: 'playlist', selectedPlaylistId: id, selectedAlbum: null })
+            navigateToPlaylist: (id) => set({ currentView: 'playlist', selectedPlaylistId: id, selectedAlbum: null }),
+            setPlaybackProgress: (progress) => set({ playbackProgress: progress })
         }),
         {
-            name: 'storm-music-history',
-            // Only persist playbackHistory to localStorage
+            name: 'storm-music-player',
+            // Persist navigation and playback state for reload recovery
             partialize: (state) => ({
-                playbackHistory: state.playbackHistory
+                // Playback history (existing)
+                playbackHistory: state.playbackHistory,
+                // Current playback state for resume after reload
+                currentTrack: state.currentTrack,
+                queue: state.queue,
+                originalQueue: state.originalQueue,
+                isShuffling: state.isShuffling,
+                repeatMode: state.repeatMode,
+                volume: state.volume,
+                playbackProgress: state.playbackProgress,
+                // Navigation state for URL restoration
+                currentView: state.currentView,
+                selectedAlbum: state.selectedAlbum,
+                selectedPlaylistId: state.selectedPlaylistId,
+                searchQuery: state.searchQuery,
             }),
         }
     )
