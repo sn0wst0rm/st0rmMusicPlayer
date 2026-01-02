@@ -29,7 +29,9 @@ export function Player() {
         lyricsOpen,
         toggleLyrics,
         library,
-        setSelectedAlbum
+        setSelectedAlbum,
+        playbackProgress,
+        setPlaybackProgress
     } = usePlayerStore()
 
     const audioRef = React.useRef<HTMLAudioElement>(null)
@@ -37,6 +39,8 @@ export function Player() {
     const [duration, setDuration] = React.useState(0)
     const [isCoverLoaded, setIsCoverLoaded] = React.useState(false)
     const [gradientColors, setGradientColors] = React.useState<string[]>(getAppleMusicFallbackColors())
+    const lastSavedProgressRef = React.useRef<number>(0)
+    const hasRestoredRef = React.useRef<boolean>(false)
 
     React.useEffect(() => {
         setIsCoverLoaded(false)
@@ -106,10 +110,50 @@ export function Player() {
 
     const handleTimeUpdate = () => {
         if (audioRef.current) {
-            setProgress(audioRef.current.currentTime)
+            const currentTime = audioRef.current.currentTime
+            setProgress(currentTime)
             setDuration(audioRef.current.duration || 0)
+
+            // Save progress to store every 5 seconds (throttled)
+            if (Math.abs(currentTime - lastSavedProgressRef.current) >= 5) {
+                setPlaybackProgress(currentTime)
+                lastSavedProgressRef.current = currentTime
+            }
         }
     }
+
+    // Restore playback position after page reload (runs once)
+    React.useEffect(() => {
+        if (hasRestoredRef.current) return
+        if (audioRef.current && currentTrack && playbackProgress > 0) {
+            // Wait for audio to be ready before seeking
+            const handleCanPlay = () => {
+                if (audioRef.current && playbackProgress > 0 && !hasRestoredRef.current) {
+                    audioRef.current.currentTime = playbackProgress
+                    setProgress(playbackProgress)
+                    hasRestoredRef.current = true
+                    // Don't auto-play, just position - user must click play
+                }
+            }
+            audioRef.current.addEventListener('canplay', handleCanPlay, { once: true })
+            return () => {
+                audioRef.current?.removeEventListener('canplay', handleCanPlay)
+            }
+        }
+    }, [currentTrack, playbackProgress])
+
+    // Save progress on page unload
+    React.useEffect(() => {
+        const handleBeforeUnload = () => {
+            if (audioRef.current && currentTrack) {
+                setPlaybackProgress(audioRef.current.currentTime)
+            }
+        }
+        window.addEventListener('beforeunload', handleBeforeUnload)
+        return () => {
+            window.removeEventListener('beforeunload', handleBeforeUnload)
+        }
+    }, [currentTrack, setPlaybackProgress])
 
     const handleEnded = () => {
         nextTrack()
