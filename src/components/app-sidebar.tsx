@@ -87,20 +87,28 @@ export function AppSidebar() {
         }
     }, [open])
 
-    // Fetch playlists on mount
+    // Fetch playlists and library on mount
     React.useEffect(() => {
-        const fetchPlaylists = async () => {
+        const fetchData = async () => {
             try {
-                const response = await fetch('/api/playlists')
-                if (response.ok) {
-                    const data = await response.json()
+                // Fetch playlists
+                const playlistsResponse = await fetch('/api/playlists')
+                if (playlistsResponse.ok) {
+                    const data = await playlistsResponse.json()
                     setPlaylists(data)
                 }
+
+                // Fetch library for search
+                const libraryResponse = await fetch('/api/library')
+                if (libraryResponse.ok) {
+                    const data = await libraryResponse.json()
+                    usePlayerStore.getState().setLibrary(data)
+                }
             } catch (error) {
-                console.error('Failed to fetch playlists:', error)
+                console.error('Failed to fetch data:', error)
             }
         }
-        fetchPlaylists()
+        fetchData()
     }, [setPlaylists])
 
     const handlePlaySong = (track: Track) => {
