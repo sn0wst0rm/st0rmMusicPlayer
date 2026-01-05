@@ -56,15 +56,16 @@ model Album {
 }
 
 model Track {
-    id       String  @id @default(uuid())
-    title    String
-    artistId String
-    artist   Artist  @relation(fields: [artistId], references: [id])
-    albumId  String
-    album    Album   @relation(fields: [albumId], references: [id])
-    filePath String  @unique // Original m4a file
-    mp3Path  String? // Converted mp3 file
-    duration Float?
+    id             String  @id @default(uuid())
+    title          String
+    artistId       String
+    artist         Artist  @relation(fields: [artistId], references: [id])
+    albumId        String
+    album          Album   @relation(fields: [albumId], references: [id])
+    filePath       String  @unique // Primary audio file path
+    codecPaths     String? // JSON: {"aac-legacy": "/path", "alac": "/path", ...}
+    preferredCodec String? // User's last selected codec for this track
+    duration       Float?
 
     // Track position
     trackNumber Int? // Position in album
@@ -139,7 +140,7 @@ model GamdlSettings {
     id                       String    @id @default("singleton")
     cookies                  String? // Netscape format cookies content
     outputPath               String    @default("./music")
-    songCodec                String    @default("aac-legacy")
+    songCodecs               String    @default("aac-legacy") // Comma-separated list of codecs to download
     lyricsFormat             String    @default("ttml")
     coverSize                Int       @default(1200)
     saveCover                Boolean   @default(true)
@@ -171,6 +172,7 @@ model ImportJob {
     tracksTotal        Int?
     tracksComplete     Int      @default(0)
     error              String?
+    selectedCodecs     String? // Comma-separated codecs for this specific download
     importedAlbumId    String? // Reference to imported Album for navigation
     importedArtistId   String? // Reference to imported Artist for navigation
     importedPlaylistId String? // Reference to imported Playlist for navigation

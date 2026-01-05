@@ -23,6 +23,8 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 import websockets
 # Use websockets.serve directly to avoid deprecation warning
+from wrapper_downloader import WrapperSongDownloader
+from wrapper_manager import get_wrapper_manager, stop_wrapper
 
 # Global state
 active_downloads: dict = {}
@@ -37,6 +39,24 @@ _scheduler: Optional[AsyncIOScheduler] = None
 # WebSocket server and connected clients
 _ws_server = None
 _ws_clients: set = set()
+# Wrapper auth socket state
+_wrapper_auth_socket = None
+_wrapper_auth_queue: asyncio.Queue = None  # Queue for auth messages from wrapper
+_wrapper_auth_pending: dict = {}  # Pending credentials/otp to send
+
+# Path to the Widevine Device file for L3 decryption (required for standard AAC)
+WVD_PATH = Path(__file__).parent / "device.wvd"
+
+# Codecs that work with gamdl native (Widevine, no wrapper needed)
+GAMDL_NATIVE_CODECS = ["aac-legacy", "aac-he-legacy"]
+
+# All other codecs require wrapper (FairPlay decryption)
+# Includes: aac, aac-he, aac-binaural, aac-downmix, aac-he-binaural, aac-he-downmix, alac, atmos, ac3
+
+def is_wrapper_required(codec: str) -> bool:
+    """Check if a codec requires the wrapper for decryption."""
+    return codec.lower() not in GAMDL_NATIVE_CODECS
+
 
 
 @asynccontextmanager
@@ -62,6 +82,10 @@ async def lifespan(app: FastAPI):
     asyncio.create_task(configure_sync_scheduler())
     
     yield
+    
+    # Shutdown wrapper subprocess
+    print("🔧 Stopping wrapper subprocess...", flush=True)
+    stop_wrapper()
     
     # Shutdown WebSocket server
     global _ws_server
@@ -503,6 +527,7 @@ async def download_tracks_for_sync(
         song_interface = AppleMusicSongInterface(interface)
         
         base_downloader = AppleMusicBaseDownloader(
+            wvd_path=str(WVD_PATH) if WVD_PATH.exists() else None,
             output_path=output_path,
             temp_path=Path(tempfile.gettempdir()),
             overwrite=False,
@@ -543,6 +568,24 @@ async def download_tracks_for_sync(
             uploaded_video_downloader=uploaded_video_downloader,
         )
         
+        # Check if wrapper is required for this codec
+        use_wrapper = is_wrapper_required(song_codec)
+        wrapper_downloader = None
+        
+        if use_wrapper:
+            # Create WrapperSongDownloader for FairPlay-encrypted streams
+            wrapper_downloader = WrapperSongDownloader(
+                base_downloader=base_downloader,
+                interface=song_interface,
+                codec=codec_enum,
+            )
+            
+            # Check wrapper availability
+            if not wrapper_downloader.is_wrapper_available():
+                print(f"[SYNC] ⚠️ Wrapper not available but required for codec '{song_codec}'", flush=True)
+                print(f"[SYNC]    Only aac-legacy and aac-he-legacy work without wrapper", flush=True)
+                return 0
+        
         # Download each missing track
         for track_id in track_ids:
             try:
@@ -566,7 +609,12 @@ async def download_tracks_for_sync(
                 # Download the track
                 for item in download_queue:
                     try:
-                        final_path = await downloader.download(item)
+                        # Use wrapper for FairPlay-encrypted codecs, gamdl native for legacy AAC
+                        if use_wrapper and wrapper_downloader:
+                            final_path = await wrapper_downloader.download(item)
+                        else:
+                            final_path = await downloader.download(item)
+                        
                         if final_path:
                             print(f"[SYNC] Downloaded track to: {final_path}", flush=True)
                             
@@ -1090,9 +1138,10 @@ async def prewarm_api():
             
             # Retry logic for timeout errors
             max_retries = 3
+            api = None
             for attempt in range(max_retries):
                 try:
-                    await get_or_create_api(cookies)
+                    api = await get_or_create_api(cookies)
                     print("[PREWARM] ✅ AppleMusicApi pre-warmed successfully!", flush=True)
                     break
                 except Exception as init_error:
@@ -1107,10 +1156,70 @@ async def prewarm_api():
                     else:
                         print(f"[PREWARM] ⚠️ Non-timeout error: {init_error}", flush=True)
                         break
+            
+            # Try to start wrapper after API is ready
+            if api:
+                await start_wrapper_if_available(api)
         else:
             print("[PREWARM] No cookies configured, skipping API pre-warm", flush=True)
     except Exception as e:
         print(f"[PREWARM] ⚠️ Pre-warm failed (non-critical): {e}", flush=True)
+
+
+async def start_wrapper_if_available(api):
+    """
+    Start the wrapper Docker container.
+    
+    The wrapper uses saved session from previous login, or starts in
+    headless mode for web-based authentication. No token extraction needed.
+    
+    ALAC/Atmos downloads require the wrapper. AAC-legacy works without it.
+    """
+    from wrapper_manager import get_wrapper_manager, check_wrapper_available
+    
+    try:
+        # Check if Docker and wrapper image are available
+        available, message = check_wrapper_available()
+        if not available:
+            print(f"[WRAPPER] ⚠️ {message}", flush=True)
+            print("[WRAPPER]    Only AAC-legacy and HE-AAC-legacy downloads available", flush=True)
+            return False
+        
+        print("[WRAPPER] Docker and wrapper image found ✓", flush=True)
+        
+        wrapper_manager = get_wrapper_manager()
+        
+        # Check if we have a saved session
+        if wrapper_manager.has_saved_session():
+            print("[WRAPPER] Found saved session, starting wrapper...", flush=True)
+        else:
+            print("[WRAPPER] No saved session - web login required", flush=True)
+            print("[WRAPPER] Starting in headless mode for web-based authentication", flush=True)
+        
+        # Start wrapper (uses saved session or headless mode)
+        success = wrapper_manager.start()
+        
+        if success:
+            # Wait for wrapper to be ready
+            if await wrapper_manager.wait_ready(timeout=30.0):
+                print("[WRAPPER] ✅ Wrapper ready for ALAC/Atmos downloads", flush=True)
+                return True
+            else:
+                print("[WRAPPER] ⚠️ Wrapper started but not responding", flush=True)
+                logs = wrapper_manager.get_container_logs(lines=20)
+                if logs:
+                    print(f"[WRAPPER] Logs:\n{logs}", flush=True)
+                return False
+        else:
+            print("[WRAPPER] ⚠️ Failed to start wrapper container", flush=True)
+            return False
+            
+    except Exception as e:
+        print(f"[WRAPPER] ⚠️ Wrapper startup failed: {e}", flush=True)
+        import traceback
+        traceback.print_exc()
+        return False
+
 
 
 app = FastAPI(
@@ -1155,6 +1264,7 @@ class ValidateUrlResponse(BaseModel):
     global_id: Optional[str] = None  # For playlist sync (pl.u-xxx)
     description: Optional[str] = None  # Playlist/album description
     extracted_url: Optional[str] = None  # Clean URL extracted from input
+    available_codecs: Optional[list] = None  # List of available audio codecs for songs
     error: Optional[str] = None
 
 
@@ -1172,7 +1282,7 @@ class DownloadRequest(BaseModel):
     url: str
     cookies: str
     output_path: str = "./music"
-    song_codec: str = "aac-legacy"
+    song_codecs: str = "aac-legacy"  # Comma-separated list of codecs
     lyrics_format: str = "lrc"
     cover_size: int = 1200
     save_cover: bool = True
@@ -1260,6 +1370,82 @@ def find_all_apple_music_urls(text: str) -> list[dict]:
                 results.append(parsed)
     
     return results
+
+
+def parse_webplayback_codecs(webplayback_data: dict, song_attributes: dict = None) -> list:
+    """Parse webplayback response and song attributes to extract available codec identifiers.
+    
+    Webplayback provides AAC flavors, while song attributes' audioTraits indicates
+    availability of lossless, atmos, and spatial audio.
+    
+    audioTraits values: 'lossless', 'hi-res-lossless', 'atmos', 'spatial', 'lossy-stereo'
+    """
+    FLAVOR_TO_CODEC = {
+        'cbcp256': 'aac-legacy',
+        'cbcp64': 'aac-he-legacy',
+        'ctrp256': 'aac',
+        'ctrp64': 'aac-he',
+        'ibhp256': 'aac-binaural',
+        'ibhp64': 'aac-he-binaural',
+        'aac256': 'aac-legacy',
+        'aac64': 'aac-he-legacy',
+    }
+    
+    codecs = set()
+    
+    # Parse webplayback flavors (AAC variants)
+    song_list = webplayback_data.get("songList", [])
+    for song in song_list:
+        assets = song.get("assets", [])
+        for asset in assets:
+            flavor = asset.get("flavor", "")
+            # Extract the codec part after the colon (e.g., "30:cbcp256" -> "cbcp256")
+            if ":" in flavor:
+                flavor_codec = flavor.split(":")[-1]
+            else:
+                flavor_codec = flavor
+            
+            # Map to our codec IDs
+            if flavor_codec in FLAVOR_TO_CODEC:
+                codecs.add(FLAVOR_TO_CODEC[flavor_codec])
+            elif 'dolby' in flavor.lower() or 'atmos' in flavor.lower():
+                codecs.add('atmos')
+            elif 'alac' in flavor.lower():
+                codecs.add('alac')
+            elif 'binaural' in flavor.lower() or 'ibhp' in flavor.lower():
+                codecs.add('aac-binaural')
+            elif 'downmix' in flavor.lower():
+                codecs.add('aac-downmix')
+            elif 'ac3' in flavor.lower():
+                codecs.add('ac3')
+    
+    # Check song attributes' audioTraits for lossless/atmos availability
+    if song_attributes:
+        audio_traits = song_attributes.get("audioTraits", [])
+        extended_urls = song_attributes.get("extendedAssetUrls", {})
+        
+        # Add lossless if available (check audioTraits and enhancedHls URL)
+        if 'lossless' in audio_traits or 'hi-res-lossless' in audio_traits:
+            if extended_urls.get("enhancedHls"):
+                codecs.add('alac')
+        
+        # Add atmos if available
+        if 'atmos' in audio_traits:
+            codecs.add('atmos')
+        
+        # Add spatial if available (already detected via ibhp flavors, but double-check)
+        if 'spatial' in audio_traits:
+            # Spatial audio is typically delivered via binaural (ibhp) flavors
+            # Already handled above, but ensure aac-binaural is present
+            if 'aac-binaural' not in codecs:
+                codecs.add('aac-binaural')
+    
+    # Sort by quality preference (standard -> hires -> spatial)
+    CODEC_ORDER = ['aac-legacy', 'aac-he-legacy', 'aac', 'aac-he', 'alac', 
+                   'aac-binaural', 'aac-he-binaural', 'aac-downmix', 'atmos', 'ac3']
+    sorted_codecs = sorted(list(codecs), key=lambda c: CODEC_ORDER.index(c) if c in CODEC_ORDER else 99)
+    
+    return sorted_codecs
 
 
 async def create_temp_cookies_file(cookies_content: str) -> str:
@@ -1798,6 +1984,34 @@ async def health_check():
     )
 
 
+@app.post("/wrapper/start")
+async def start_wrapper_endpoint():
+    """Manually start the wrapper Docker container."""
+    from wrapper_manager import get_wrapper_manager
+    
+    # Get tokens from cached API or settings
+    try:
+        if _cached_api.get("api"):
+            result = await start_wrapper_if_available(_cached_api["api"])
+            if result:
+                return {"success": True, "message": "Wrapper started successfully"}
+            else:
+                return {"success": False, "message": "Failed to start wrapper - check logs"}
+        else:
+            return {"success": False, "message": "No API initialized - configure cookies first"}
+    except Exception as e:
+        return {"success": False, "message": str(e)}
+
+
+@app.post("/wrapper/stop")
+async def stop_wrapper_endpoint():
+    """Stop the wrapper Docker container."""
+    from wrapper_manager import stop_wrapper
+    
+    stop_wrapper()
+    return {"success": True, "message": "Wrapper stopped"}
+
+
 @app.get("/test-sse")
 async def test_sse():
     """Test SSE endpoint to verify streaming works."""
@@ -1966,6 +2180,17 @@ async def validate_url(request: ValidateUrlRequest):
                             artwork = attrs.get("artwork", {})
                             artwork_url = artwork.get("url", "").replace("{w}", "1200").replace("{h}", "1200") if artwork else None
                             
+                            # Fetch webplayback to get available codecs
+                            available_codecs = None
+                            try:
+                                webplayback = await apple_music_api.get_webplayback(content_id)
+                                if webplayback:
+                                    # Pass attrs to check audioTraits for lossless/atmos
+                                    available_codecs = parse_webplayback_codecs(webplayback, attrs)
+                                    print(f"[DEBUG] Available codecs for {content_id}: {available_codecs}")
+                            except Exception as wp_e:
+                                print(f"Failed to fetch webplayback for codecs: {wp_e}")
+                            
                             name = attrs.get("name")
                             if name:
                                 return ValidateUrlResponse(
@@ -1977,6 +2202,7 @@ async def validate_url(request: ValidateUrlRequest):
                                     track_count=1,
                                     apple_music_id=content_id,
                                     extracted_url=url_parsed.get("extracted_url"),
+                                    available_codecs=available_codecs,
                                 )
                     except Exception as e:
                         print(f"Failed to fetch song: {e}")
@@ -2165,6 +2391,17 @@ async def validate_batch(request: ValidateBatchRequest):
                             artwork = attrs.get("artwork", {})
                             artwork_url = artwork.get("url", "").replace("{w}", "1200").replace("{h}", "1200") if artwork else None
                             
+                            # Fetch webplayback to get available codecs
+                            available_codecs = None
+                            try:
+                                webplayback = await apple_music_api.get_webplayback(content_id)
+                                if webplayback:
+                                    # Pass attrs to check audioTraits for lossless/atmos
+                                    available_codecs = parse_webplayback_codecs(webplayback, attrs)
+                                    print(f"[DEBUG] Available codecs for {content_id}: {available_codecs}")
+                            except Exception as wp_e:
+                                print(f"Failed to fetch webplayback for codecs: {wp_e}")
+                            
                             song_name = attrs.get("name", "Unknown Song")
                             print(f"[DEBUG] Adding song to items: {song_name}", flush=True)
                             items.append(ValidateUrlResponse(
@@ -2176,6 +2413,7 @@ async def validate_batch(request: ValidateBatchRequest):
                                 track_count=1,
                                 apple_music_id=catalog_id,
                                 extracted_url=url_parsed.get("extracted_url"),
+                                available_codecs=available_codecs,
                             ))
                         else:
                             print(f"[DEBUG] Song data was None/empty - likely not available in storefront '{apple_music_api.storefront}'", flush=True)
@@ -2517,6 +2755,7 @@ async def start_download(request: DownloadRequest):
             song_interface = AppleMusicSongInterface(interface)
             
             base_downloader = AppleMusicBaseDownloader(
+                wvd_path=str(WVD_PATH) if WVD_PATH.exists() else None,
                 output_path=Path(request.output_path),
                 temp_path=Path(tempfile.gettempdir()),
                 overwrite=request.overwrite,
@@ -2525,8 +2764,15 @@ async def start_download(request: DownloadRequest):
                 cover_format=CoverFormat.JPG,
             )
             
+            # Parse comma-separated codec list, use first as primary
+            codec_list = [c.strip() for c in request.song_codecs.split(',') if c.strip()]
+            if not codec_list:
+                codec_list = ['aac-legacy']
+            primary_codec = codec_list[0]
+            print(f"[DEBUG] Requested codecs: {codec_list}, primary: {primary_codec}", flush=True)
+            
             # Convert string settings to enums
-            codec_enum = SongCodec(request.song_codec)
+            codec_enum = SongCodec(primary_codec)
             lyrics_format_enum = SyncedLyricsFormat(request.lyrics_format) if request.lyrics_format != "none" else None
             
             song_downloader = AppleMusicSongDownloader(
@@ -2645,16 +2891,170 @@ async def start_download(request: DownloadRequest):
                         }),
                     }
                     
-                    # Perform download
-                    print(f"[DEBUG] Calling downloader.download() for track {i + 1}...", flush=True)
-                    result = await downloader.download(download_item)
-                    print(f"[DEBUG] Download result for track {i + 1}: {result}", flush=True)
+                    # Perform download for each codec
+                    print(f"[DEBUG] Processing codecs: {codec_list} for track {i + 1}...", flush=True)
                     
-                    if result and hasattr(result, "final_path") and result.final_path:
-                        file_path = str(result.final_path)
+                    import copy
+                    import shutil
+                    import uuid
+                    request_id = str(uuid.uuid4())[:8]
+                    primary_file_path = None
+                    primary_download_item = download_item
+                    codec_paths_map = {}
+                    
+                    for codec_idx, codec_name in enumerate(codec_list):
+                        try:
+                            # Use a specific staging directory for this codec to prevent collisions
+                            # and allow us to rename before moving to final destination
+                            staging_dir = Path(tempfile.gettempdir()) / f"gamdl_stage_{request_id}_{i}_{codec_name}"
+                            staging_dir.mkdir(parents=True, exist_ok=True)
+                            
+                            print(f"[DEBUG] Staging download for {codec_name} in: {staging_dir}", flush=True)
+                            
+                            # Re-initialize downloaders with staging output path
+                            # Use staging_dir for both output and temp to avoid confusion/mkdirs issues
+                            use_wrapper_for_codec = is_wrapper_required(codec_name)
+                            c_base_dl = AppleMusicBaseDownloader(
+                                wvd_path=str(WVD_PATH) if WVD_PATH.exists() else None,
+                                output_path=staging_dir, # Download to staging first
+                                temp_path=staging_dir,   # Use staging dir as temp root
+                                overwrite=True, # Always overwrite in staging
+                                save_cover=request.save_cover and (codec_idx == 0), # Only save cover once
+                                cover_size=request.cover_size,
+                                cover_format=CoverFormat.JPG,
+                                use_wrapper=use_wrapper_for_codec,
+                            )
+                            
+                            # Route Hi-Res/Spatial codecs (alac, atmos, etc.) to wrapper
+                            # Standard codecs (aac-legacy, aac-he-legacy) use gamdl native
+                            if use_wrapper_for_codec:
+                                c_song_dl = WrapperSongDownloader(
+                                    base_downloader=c_base_dl,
+                                    interface=song_interface,
+                                    codec=SongCodec(codec_name),
+                                )
+                            else:
+                                c_song_dl = AppleMusicSongDownloader(
+                                    base_downloader=c_base_dl,
+                                    interface=song_interface,
+                                    codec=SongCodec(codec_name),
+                                    synced_lyrics_format=lyrics_format_enum if lyrics_format_enum else SyncedLyricsFormat.LRC,
+                                    no_synced_lyrics=(request.lyrics_format == "none") or (codec_idx > 0), # Only lyrics for first codec
+                                )
+                            
+                            c_mv_dl = AppleMusicMusicVideoDownloader(base_downloader=c_base_dl, interface=music_video_interface)
+                            c_uv_dl = AppleMusicUploadedVideoDownloader(base_downloader=c_base_dl, interface=uploaded_video_interface)
+                            
+                            c_downloader = AppleMusicDownloader(
+                                interface=interface,
+                                base_downloader=c_base_dl,
+                                song_downloader=c_song_dl,
+                                music_video_downloader=c_mv_dl,
+                                uploaded_video_downloader=c_uv_dl,
+                            )
+                            
+                            # Clone item to avoid side effects
+                            c_item = copy.copy(download_item)
+                            
+                            # Regenerate random_uuid and staged_path using the per-codec downloader
+                            # The original item has paths based on the main downloader's temp_path (/tmp),
+                            # but we need paths in the per-codec staging directory
+                            c_item.random_uuid = c_base_dl.get_random_uuid()
+                            if c_item.stream_info and c_item.stream_info.file_format:
+                                c_item.staged_path = c_base_dl.get_temp_path(
+                                    c_item.media_metadata["id"],
+                                    c_item.random_uuid,
+                                    "staged",
+                                    "." + c_item.stream_info.file_format.value,
+                                )
+                            else:
+                                # Fallback for when stream_info is not available
+                                c_item.staged_path = c_base_dl.get_temp_path(
+                                    c_item.media_metadata["id"],
+                                    c_item.random_uuid,
+                                    "staged",
+                                    ".m4a",
+                                )
+                            
+                            print(f"[DEBUG] Downloading {codec_name}...", flush=True)
+                            
+                            # For wrapper codecs, bypass gamdl's AppleMusicDownloader.download()
+                            # which expects an external amdecrypt executable.
+                            # Instead, call WrapperSongDownloader.download() directly
+                            # which uses our Python amdecrypt.py module.
+                            if use_wrapper_for_codec:
+                                wrapper_result = await c_song_dl.download(c_item)
+                                # WrapperSongDownloader.download() returns the final Path directly
+                                if wrapper_result:
+                                    c_item.final_path = str(wrapper_result)
+                                c_result = c_item
+                            else:
+                                c_result = await c_downloader.download(c_item)
+                            
+                            if c_result and hasattr(c_result, "final_path") and c_result.final_path:
+                                staged_path = Path(c_result.final_path)
+                                
+                                # Determine final filename with codec suffix
+                                if staged_path.suffix.lower() in ['.m4a', '.mp4', '.m4b', '.mov', '.m4v']:
+                                    new_filename = f"{staged_path.stem} [{codec_name}]{staged_path.suffix}"
+                                else:
+                                    new_filename = staged_path.name
+                                    
+                                final_dest = Path(request.output_path) / new_filename
+                                
+                                # Ensure output dir exists
+                                final_dest.parent.mkdir(parents=True, exist_ok=True)
+                                
+                                # Move file to final destination
+                                if final_dest.exists() and request.overwrite:
+                                    final_dest.unlink()
+                                
+                                if not final_dest.exists():
+                                    shutil.move(str(staged_path), str(final_dest))
+                                    print(f"[DEBUG] Moved {codec_name} to: {final_dest}", flush=True)
+                                    
+                                    # Move lyrics/cover if generated in staging
+                                    for extra in staging_dir.glob("*"):
+                                        if extra.is_file() and extra.name != staged_path.name:
+                                            # It's an extra file (lyrics, cover)
+                                            # We generally only want these once, and they might not have codec suffix
+                                            # If it's lyrics, maybe rename too?
+                                            # For now, let's move them if they don't exist
+                                            extra_dest = Path(request.output_path) / extra.name
+                                            if not extra_dest.exists():
+                                                shutil.move(str(extra), str(extra_dest))
+                                
+                                    final_path_str = str(final_dest)
+                                    codec_paths_map[codec_name] = final_path_str
+                                    
+                                    # Set as primary if first successful one
+                                    if not primary_file_path:
+                                        primary_file_path = final_path_str
+                                        # Update download_item to point to REAL final path for metadata extraction
+                                        download_item.final_path = final_path_str
+                                else:
+                                    print(f"[DEBUG] File exists and overwrite=False: {final_dest}", flush=True)
+                                    codec_paths_map[codec_name] = str(final_dest)
+                                    if not primary_file_path:
+                                        primary_file_path = str(final_dest)
+                                        download_item.final_path = str(final_dest)
+                                        
+                        except Exception as dl_err:
+                            print(f"[ERROR] Failed to download {codec_name} for track {i+1}: {dl_err}", flush=True)
+                            # Continue to next codec
+                    
+                    if primary_file_path:
+                        file_path = primary_file_path
+                        result = primary_download_item # Use original item (updated) for subsequent logic
                         
-                        # Extract metadata from downloaded file
-                        metadata = extract_metadata_from_file(file_path)
+                        # Extract metadata from downloaded file (using the primary file)
+                        try:
+                            metadata = extract_metadata_from_file(file_path)
+                        except Exception as e:
+                            print(f"Metadata extraction failed: {e}")
+                            metadata = {}
+
+                        # ... (Rest of logic continues using 'file_path' variable)
                         
                         # Extract Apple Music IDs from download_item
                         apple_ids = extract_apple_music_ids_from_item(download_item)
@@ -2663,10 +3063,33 @@ async def start_download(request: DownloadRequest):
                         # Merge album-level metadata from API
                         metadata.update(album_metadata)
                         
-                        # Find lyrics file if it exists
+                        # Find lyrics file if it exists (in final output path)
                         lyrics_path = None
                         lyrics_type = None
+                        
+                        # Map lyrics format from request
+                        lyric_target_exists = False
                         if request.lyrics_format != "none":
+                            # Check for lyrics file with same base name as the primary file
+                            # Since we renamed the audio file, the lyrics might not match if they were moved blindly
+                            # But we moved extras.
+                            # Standard gamdl naming for lyrics matches audio filename base.
+                            # Since we renamed audio to "Title [Codec]", we need to check if lyrics were renamed?
+                            # No, we moved extras "as is" or with original name.
+                            # If we moved "Title.lrc", it won't match "Title [Codec].m4a".
+                            # This is a small issue. We should rename lyrics to match the primary audio file?
+                            # Or just look for "Title.lrc".
+                            pass
+                            
+                        # Re-implement lyrics discovery based on Primary File Path stem
+                        # If primary file is "Title [Codec].m4a", we look for "Title [Codec].lrc"?
+                        # Or just "Title.lrc"?
+                        # The code below uses Path(file_path).with_suffix().
+                        # So it looks for "Title [Codec].lrc".
+                        # But we saved "Title.lrc" (probably).
+                        
+                        # We should rename the lyrics file to match the primary audio file if we want them associated.
+                        
                             potential_lrc = Path(file_path).with_suffix(f".{request.lyrics_format}")
                             if potential_lrc.exists():
                                 lyrics_path = str(potential_lrc)
@@ -2730,17 +3153,46 @@ async def start_download(request: DownloadRequest):
                                     print(f"[LYRICS] Error fetching lyrics: {lyrics_err}", flush=True)
                                     traceback.print_exc()
                         
+                        # Find lyrics file - heuristic: check for .lrc with same base name (ignoring [Codec])
+                        # or just check specific patterns since we moved them "as is"
+                        lyrics_path = None
+                        if request.lyrics_format != "none":
+                            # Try to find matching lyrics file
+                            # Since we renamed audio to "Title [Codec].m4a", the lyrics are likely "Title.lrc"
+                            # We can try to guess "Title.lrc" by stripping " [Codec]"
+                            # But better: just pass the lyrics path if we found it in the loop?
+                            # For simplicity, let's look for the .lrc file corresponding to the *renamed* file first (unlikely)
+                            # then the base name.
+                            
+                            base_stem = Path(file_path).stem
+                            # Try stripping known codec suffixes
+                            for c_name in codec_list:
+                                if f" [{c_name}]" in base_stem:
+                                    base_stem = base_stem.replace(f" [{c_name}]", "")
+                            
+                            potential_lrc_base = Path(file_path).parent / f"{base_stem}.{request.lyrics_format}"
+                            if potential_lrc_base.exists():
+                                lyrics_path = str(potential_lrc_base)
+                            else:
+                                # Try exact match (rare if we renamed)
+                                potential_lrc_exact = Path(file_path).with_suffix(f".{request.lyrics_format}")
+                                if potential_lrc_exact.exists():
+                                    lyrics_path = str(potential_lrc_exact)
+                        
                         # Find cover file
                         cover_path = None
                         if request.save_cover:
                             potential_cover = Path(file_path).parent / "cover.jpg"
                             if potential_cover.exists():
                                 cover_path = str(potential_cover)
-                        
+
                         yield {
                             "event": "track_complete",
                             "data": json.dumps({
+                                "codec_paths": codec_paths_map, # Include the map of all downloaded files
+                                "codecPaths": codec_paths_map,  # Redundant key for TS compatibility to ensure frontend receives the full map
                                 "filePath": file_path,
+                                # removed duplicate codecPaths key that was overwriting the map
                                 "lyricsPath": lyrics_path,
                                 "coverPath": cover_path,
                                 "metadata": metadata,
@@ -2797,6 +3249,7 @@ async def start_download(request: DownloadRequest):
                                 "event": "track_complete",
                                 "data": json.dumps({
                                     "filePath": file_path,
+                                    "codecPaths": {primary_codec: file_path},  # Store codec -> path mapping
                                     "lyricsPath": lyrics_path,
                                     "coverPath": cover_path,
                                     "metadata": metadata,
@@ -2856,6 +3309,101 @@ async def start_download(request: DownloadRequest):
                     pass
     
     print("[DEBUG] Creating EventSourceResponse...", flush=True)
+    return EventSourceResponse(event_generator())
+
+
+# --- Wrapper Auth Endpoints ---
+
+class WrapperAuthSubmitRequest(BaseModel):
+    type: str  # "credentials" or "otp"
+    username: Optional[str] = None
+    password: Optional[str] = None
+    code: Optional[str] = None
+
+@app.get("/wrapper/status")
+async def get_wrapper_status():
+    """Get wrapper container and auth status."""
+    mgr = get_wrapper_manager()
+    docker_ok, image_ok, msg = mgr.get_availability()
+    
+    return {
+        "docker_available": docker_ok,
+        "image_available": image_ok,
+        "has_saved_session": mgr.has_saved_session() if docker_ok and image_ok else False,
+        "is_running": mgr.is_running() if docker_ok and image_ok else False,
+        "needs_auth": docker_ok and image_ok and mgr.is_running() and not mgr.has_saved_session(),
+        "message": msg
+    }
+
+@app.post("/wrapper/auth/submit")
+async def submit_wrapper_auth(request: WrapperAuthSubmitRequest):
+    """Submit credentials or OTP to the wrapper auth socket."""
+    global _wrapper_auth_socket
+    
+    mgr = get_wrapper_manager()
+    
+    # Connect to auth socket if not already connected
+    if _wrapper_auth_socket is None:
+        if not mgr.connect_auth_socket(timeout=5.0):
+            raise HTTPException(status_code=500, detail="Failed to connect to wrapper auth socket")
+        _wrapper_auth_socket = mgr._auth_socket
+    
+    try:
+        if request.type == "credentials":
+            if not request.username or not request.password:
+                raise HTTPException(status_code=400, detail="Missing username or password")
+            success = mgr.submit_credentials(request.username, request.password)
+        elif request.type == "otp":
+            if not request.code or len(request.code) != 6:
+                raise HTTPException(status_code=400, detail="Invalid OTP code")
+            success = mgr.submit_otp(request.code)
+        else:
+            raise HTTPException(status_code=400, detail="Unknown type")
+        
+        if success:
+            return {"status": "submitted"}
+        else:
+            raise HTTPException(status_code=500, detail="Failed to send to wrapper")
+    except Exception as e:
+        print(f"[WRAPPER AUTH] Error: {e}", flush=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/wrapper/auth/stream")
+async def wrapper_auth_stream():
+    """SSE stream for wrapper auth messages."""
+    mgr = get_wrapper_manager()
+    
+    async def event_generator():
+        global _wrapper_auth_socket
+        
+        # Connect to auth socket
+        max_retries = 20
+        for i in range(max_retries):
+            if mgr.connect_auth_socket(timeout=2.0):
+                _wrapper_auth_socket = mgr._auth_socket
+                break
+            await asyncio.sleep(0.5)
+        else:
+            yield {"data": json.dumps({"type": "error", "message": "Failed to connect to auth socket"})}
+            return
+        
+        # Read messages and yield them as SSE events
+        while True:
+            try:
+                # Use run_in_executor for blocking socket read
+                msg = await asyncio.get_event_loop().run_in_executor(
+                    None, lambda: mgr._recv_auth_message(timeout=60.0)
+                )
+                if msg:
+                    yield {"data": json.dumps(msg)}
+                    if msg.get("type") in ["auth_success", "auth_failed"]:
+                        break
+            except Exception as e:
+                print(f"[WRAPPER AUTH STREAM] Error: {e}", flush=True)
+                yield {"data": json.dumps({"type": "error", "message": str(e)})}
+                break
+            await asyncio.sleep(0.1)
+    
     return EventSourceResponse(event_generator())
 
 
