@@ -87,6 +87,9 @@ interface PlayerState {
     playlists: Playlist[]
     selectedPlaylistId: string | null
     playbackProgress: number  // Last known playback position in seconds (for resume after reload)
+    // Codec switching state
+    currentCodec: string | null  // Currently playing codec
+    availableCodecs: string[]    // Available codecs for current track
 
     // Actions
     setIsPlaying: (isPlaying: boolean) => void
@@ -118,6 +121,10 @@ interface PlayerState {
     setSelectedPlaylistId: (id: string | null) => void
     navigateToPlaylist: (id: string) => void
     setPlaybackProgress: (progress: number) => void
+    // Codec actions
+    setCurrentCodec: (codec: string) => void
+    setAvailableCodecs: (codecs: string[]) => void
+    fetchCodecsForTrack: (trackId: string) => Promise<void>
 }
 
 // Helper to add track to playback history
@@ -157,6 +164,8 @@ export const usePlayerStore = create<PlayerState>()(
             selectedPlaylistId: null,
             gamdlServiceOnline: false,
             playbackProgress: 0,
+            currentCodec: null,
+            availableCodecs: [],
 
             setIsPlaying: (isPlaying) => set({ isPlaying }),
             setVolume: (volume) => set({ volume }),
@@ -360,7 +369,23 @@ export const usePlayerStore = create<PlayerState>()(
             setSelectedPlaylistId: (id) => set({ selectedPlaylistId: id }),
             setGamdlServiceOnline: (online) => set({ gamdlServiceOnline: online }),
             navigateToPlaylist: (id) => set({ currentView: 'playlist', selectedPlaylistId: id, selectedAlbum: null }),
-            setPlaybackProgress: (progress) => set({ playbackProgress: progress })
+            setPlaybackProgress: (progress) => set({ playbackProgress: progress }),
+            setCurrentCodec: (codec) => set({ currentCodec: codec }),
+            setAvailableCodecs: (codecs) => set({ availableCodecs: codecs }),
+            fetchCodecsForTrack: async (trackId) => {
+                try {
+                    const res = await fetch(`/api/track/${trackId}/codecs`)
+                    if (res.ok) {
+                        const data = await res.json()
+                        set({
+                            availableCodecs: data.available || [],
+                            currentCodec: data.current || data.available?.[0] || null
+                        })
+                    }
+                } catch (error) {
+                    console.error('Failed to fetch codecs:', error)
+                }
+            }
         }),
         {
             name: 'storm-music-player',

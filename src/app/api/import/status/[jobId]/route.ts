@@ -54,6 +54,7 @@ interface TrackMetadata {
 
 interface TrackCompleteEvent {
     filePath: string;
+    codecPaths?: Record<string, string>; // {"aac-legacy": "/path", "alac": "/path"}
     lyricsPath?: string;
     coverPath?: string;
     metadata: TrackMetadata;
@@ -145,6 +146,7 @@ async function insertTrackToLibrary(event: TrackCompleteEvent): Promise<{ albumI
             artistId: artist.id,
             albumId: album.id,
             filePath,
+            codecPaths: event.codecPaths ? JSON.stringify(event.codecPaths) : null,
             duration: metadata.duration || null,
             trackNumber: metadata.trackNumber || null,
             trackTotal: metadata.trackTotal || null,
@@ -172,6 +174,7 @@ async function insertTrackToLibrary(event: TrackCompleteEvent): Promise<{ albumI
         },
         update: {
             title: metadata.title || undefined,
+            codecPaths: event.codecPaths ? JSON.stringify(event.codecPaths) : undefined,
             duration: metadata.duration || undefined,
             trackNumber: metadata.trackNumber || undefined,
             trackTotal: metadata.trackTotal || undefined,
@@ -261,7 +264,8 @@ export async function GET(request: Request, { params }: RouteParams) {
                         url: job.url,
                         cookies: settings.cookies,
                         output_path: settings.outputPath,
-                        song_codec: settings.songCodec,
+                        // Use job-specific codecs if provided, otherwise fall back to settings
+                        song_codecs: job.selectedCodecs || settings.songCodecs || 'aac-legacy',
                         lyrics_format: settings.lyricsFormat,
                         cover_size: settings.coverSize,
                         save_cover: settings.saveCover,

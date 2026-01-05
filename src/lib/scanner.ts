@@ -123,39 +123,56 @@ async function processFile(filePath: string) {
 
         if (sourcePath) {
             // This mp3 matches a source file. Update that source file's record to include this mp3.
-            // We assume the source file has been or will be indexed.
-            // We'll try to update the track with filePath == sourcePath.
-            // If it doesn't exist yet, we can create it? Or wait?
-            // Better to just update if exists, or do nothing. Next scan pass or order of operations will catch it.
-            // Actually, upsert is safer.
-
-            await db.track.upsert({
-                where: { filePath: sourcePath }, // Key off the SOURCE file
-                create: {
-                    title,
-                    duration,
-                    trackNumber,
-                    filePath: sourcePath,
-                    mp3Path: filePath, // The derived file
-                    albumId: album.id,
-                    artistId: artist.id,
-                },
-                update: {
-                    mp3Path: filePath
-                }
+            // We'll add it to codecPaths as an additional format
+            const existingTrack = await db.track.findUnique({
+                where: { filePath: sourcePath }
             });
 
+            if (existingTrack) {
+                // Add mp3 to codecPaths
+                let codecPaths: Record<string, string> = {};
+                if (existingTrack.codecPaths) {
+                    try {
+                        codecPaths = JSON.parse(existingTrack.codecPaths);
+                    } catch (e) { /* ignore */ }
+                }
+                // Determine original codec
+                if (!codecPaths['aac-legacy']) {
+                    codecPaths['aac-legacy'] = sourcePath;
+                }
+                codecPaths['mp3'] = filePath;
+
+                await db.track.update({
+                    where: { id: existingTrack.id },
+                    data: { codecPaths: JSON.stringify(codecPaths) }
+                });
+            } else {
+                // Source not indexed yet - create with both paths in codecPaths
+                const codecPaths = { 'aac-legacy': sourcePath, 'mp3': filePath };
+                await db.track.create({
+                    data: {
+                        title,
+                        duration,
+                        trackNumber,
+                        filePath: sourcePath,
+                        codecPaths: JSON.stringify(codecPaths),
+                        albumId: album.id,
+                        artistId: artist.id,
+                    }
+                });
+            }
+
         } else {
-            // No source file found. This MP3 is a standalone track (e.g. downloaded mp3).
-            // Treat it as a primary track.
+            // No source file found. This MP3 is a standalone track.
+            const codecPaths = { 'mp3': filePath };
             await db.track.upsert({
                 where: { filePath: filePath },
                 create: {
                     title,
                     duration,
                     trackNumber,
-                    filePath: filePath, // It's its own source
-                    mp3Path: filePath, // And its own mp3
+                    filePath: filePath,
+                    codecPaths: JSON.stringify(codecPaths),
                     albumId: album.id,
                     artistId: artist.id,
                 },

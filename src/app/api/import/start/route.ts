@@ -7,7 +7,7 @@ const GAMDL_SERVICE_URL = process.env.GAMDL_SERVICE_URL || 'http://127.0.0.1:510
 export async function POST(request: Request) {
     try {
         const body = await request.json();
-        const { url, type, title, artist, artworkUrl, description, globalId } = body;
+        const { url, type, title, artist, artworkUrl, description, globalId, selectedCodecs } = body;
 
         if (!url || typeof url !== 'string') {
             return NextResponse.json(
@@ -39,7 +39,11 @@ export async function POST(request: Request) {
                 globalId: globalId || null,
                 artworkUrl: artworkUrl || null,
                 status: 'pending',
-                progress: 0
+                progress: 0,
+                // Store selected codecs if provided (array to comma-separated string)
+                selectedCodecs: Array.isArray(selectedCodecs) && selectedCodecs.length > 0
+                    ? selectedCodecs.join(',')
+                    : null
             }
         });
 

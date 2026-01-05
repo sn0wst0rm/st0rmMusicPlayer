@@ -25,11 +25,14 @@ import {
     Music,
     Link2,
     RefreshCw,
-    Trash2
+    Trash2,
+    Layers
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { ImportSettings } from "./ImportSettings"
 import { SyncStatus } from "./SyncStatus"
+import { DownloadQueue } from "./DownloadQueue"
+import { WrapperLoginModal } from "@/components/WrapperLoginModal"
 import { toast } from "sonner"
 
 interface ValidationResult {
@@ -43,6 +46,7 @@ interface ValidationResult {
     extracted_url?: string  // Clean URL extracted from input text
     global_id?: string // Global playlist ID (pl.u-xxx)
     description?: string
+    available_codecs?: string[]  // Available codecs for songs (from API)
     error?: string
 }
 
@@ -75,7 +79,14 @@ export function ImportView() {
     const [downloadProgress, setDownloadProgress] = useState<{ current: number, total: number } | null>(null)
     const [importJobs, setImportJobs] = useState<ImportJob[]>([])
     const [showSettings, setShowSettings] = useState(false)
+    const [showQueue, setShowQueue] = useState(false)
     const [cookiesConfigured, setCookiesConfigured] = useState(false)
+    const [showWrapperLogin, setShowWrapperLogin] = useState(false)
+    const [wrapperNeedsAuth, setWrapperNeedsAuth] = useState(false)
+
+    // Codec selection state for songs
+    const [selectedCodecs, setSelectedCodecs] = useState<string[]>([])
+    const [defaultCodecs, setDefaultCodecs] = useState<string[]>(['aac-legacy'])
 
     // Check service health on mount
     const checkServiceHealth = useCallback(async () => {
@@ -85,6 +96,11 @@ export function ImportView() {
                 const data = await res.json()
                 setGamdlServiceOnline(data.serviceOnline)
                 setCookiesConfigured(data.cookiesConfigured)
+                // Get default codecs from settings
+                if (data.songCodecs) {
+                    const codecs = data.songCodecs.split(',').filter((c: string) => c.trim())
+                    setDefaultCodecs(codecs.length > 0 ? codecs : ['aac-legacy'])
+                }
             }
         } catch {
             setGamdlServiceOnline(false)
@@ -95,7 +111,21 @@ export function ImportView() {
         checkServiceHealth()
         // Fetch existing import jobs
         fetchImportJobs()
+        // Check wrapper status
+        checkWrapperStatus()
     }, [checkServiceHealth])
+
+    const checkWrapperStatus = async () => {
+        try {
+            const res = await fetch('http://localhost:5100/wrapper/status')
+            if (res.ok) {
+                const data = await res.json()
+                setWrapperNeedsAuth(data.needs_auth && data.is_running)
+            }
+        } catch {
+            // Ignore - wrapper check is optional
+        }
+    }
 
     const fetchImportJobs = async () => {
         try {
@@ -144,12 +174,25 @@ export function ImportView() {
                 if (result.items && result.items.length > 0) {
                     if (result.items.length === 1) {
                         // Single URL - use normal flow
-                        setValidationResult(result.items[0])
+                        const item = result.items[0]
+                        setValidationResult(item)
                         setBatchResults([])
+
+                        // Initialize selected codecs for songs based on availability and defaults
+                        if (item.type === 'song' && item.available_codecs?.length) {
+                            // Filter defaultCodecs to only those available
+                            const available = new Set(item.available_codecs)
+                            const initialSelection = defaultCodecs.filter(c => available.has(c))
+                            // If no defaults match, use first available
+                            setSelectedCodecs(initialSelection.length > 0 ? initialSelection : [item.available_codecs[0]])
+                        } else {
+                            setSelectedCodecs([])
+                        }
                     } else {
                         // Multiple URLs - show batch UI
                         setValidationResult(null)
                         setBatchResults(result.items)
+                        setSelectedCodecs([])
                     }
                 } else {
                     setValidationResult({
@@ -193,7 +236,11 @@ export function ImportView() {
                     artist: validationResult.artist,
                     artworkUrl: validationResult.artwork_url,
                     description: validationResult.description,
-                    globalId: validationResult.global_id
+                    globalId: validationResult.global_id,
+                    // Pass selected codecs for songs (overrides settings)
+                    selectedCodecs: validationResult.type === 'song' && selectedCodecs.length > 0
+                        ? selectedCodecs
+                        : undefined
                 })
             })
 
@@ -385,6 +432,17 @@ export function ImportView() {
                     </p>
                 </div>
                 <div className="flex items-center gap-3">
+                    {/* Wrapper auth button */}
+                    {wrapperNeedsAuth && (
+                        <Button
+                            variant="outline"
+                            size="sm"
+                            className="text-amber-600 border-amber-600 hover:bg-amber-50"
+                            onClick={() => setShowWrapperLogin(true)}
+                        >
+                            Login to Apple Music
+                        </Button>
+                    )}
                     {/* Service status indicator */}
                     <div className={cn(
                         "flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium",
@@ -398,6 +456,14 @@ export function ImportView() {
                         )} />
                         {gamdlServiceOnline ? "Service Online" : "Service Offline"}
                     </div>
+                    <Button
+                        variant="outline"
+                        size="icon"
+                        onClick={() => setShowQueue(true)}
+                        title="Download Queue"
+                    >
+                        <Layers className="h-4 w-4" />
+                    </Button>
                     <Button
                         variant="outline"
                         size="icon"
@@ -441,30 +507,91 @@ export function ImportView() {
 
                     {/* Single Item Preview Card */}
                     {validationResult?.valid && (
-                        <div className="flex items-center gap-4 p-4 rounded-lg bg-secondary/30 border">
-                            <div className="h-16 w-16 rounded-md bg-secondary flex items-center justify-center overflow-hidden flex-shrink-0">
-                                {validationResult.artwork_url ? (
-                                    <img
-                                        src={validationResult.artwork_url}
-                                        alt={validationResult.title}
-                                        className="h-full w-full object-cover"
-                                    />
-                                ) : (
-                                    <Music className="h-8 w-8 text-muted-foreground" />
-                                )}
-                            </div>
-                            <div className="flex-1 min-w-0">
-                                <h3 className="font-semibold truncate">{validationResult.title}</h3>
-                                {validationResult.artist && (
-                                    <p className="text-sm text-muted-foreground truncate">
-                                        {validationResult.artist}
+                        <div className="p-4 rounded-lg bg-secondary/30 border space-y-3">
+                            <div className="flex items-center gap-4">
+                                <div className="h-16 w-16 rounded-md bg-secondary flex items-center justify-center overflow-hidden flex-shrink-0">
+                                    {validationResult.artwork_url ? (
+                                        <img
+                                            src={validationResult.artwork_url}
+                                            alt={validationResult.title}
+                                            className="h-full w-full object-cover"
+                                        />
+                                    ) : (
+                                        <Music className="h-8 w-8 text-muted-foreground" />
+                                    )}
+                                </div>
+                                <div className="flex-1 min-w-0">
+                                    <h3 className="font-semibold truncate">{validationResult.title}</h3>
+                                    {validationResult.artist && (
+                                        <p className="text-sm text-muted-foreground truncate">
+                                            {validationResult.artist}
+                                        </p>
+                                    )}
+                                    <p className="text-xs text-muted-foreground capitalize">
+                                        {validationResult.type}
+                                        {validationResult.track_count && ` • ${validationResult.track_count} tracks`}
                                     </p>
-                                )}
-                                <p className="text-xs text-muted-foreground capitalize">
-                                    {validationResult.type}
-                                    {validationResult.track_count && ` • ${validationResult.track_count} tracks`}
-                                </p>
+                                </div>
                             </div>
+
+                            {/* Codec Selection for Songs */}
+                            {validationResult.type === 'song' && validationResult.available_codecs && validationResult.available_codecs.length > 0 && (
+                                <div className="space-y-2">
+                                    <p className="text-xs font-medium text-muted-foreground">Select formats to download:</p>
+                                    <div className="flex flex-wrap gap-2">
+                                        {validationResult.available_codecs.map((codec) => {
+                                            const isSelected = selectedCodecs.includes(codec)
+                                            const codecLabels: Record<string, { label: string; category: 'standard' | 'hires' | 'spatial' }> = {
+                                                'aac-legacy': { label: 'AAC', category: 'standard' },
+                                                'aac-he-legacy': { label: 'AAC-HE', category: 'standard' },
+                                                'aac': { label: 'AAC 48kHz', category: 'standard' },
+                                                'aac-he': { label: 'AAC-HE 48kHz', category: 'standard' },
+                                                'alac': { label: 'Lossless', category: 'hires' },
+                                                'atmos': { label: 'Dolby Atmos', category: 'spatial' },
+                                                'aac-binaural': { label: 'Spatial', category: 'spatial' },
+                                                'aac-he-binaural': { label: 'Spatial HE', category: 'spatial' },
+                                                'aac-downmix': { label: 'Downmix', category: 'standard' },
+                                                'ac3': { label: 'AC3', category: 'spatial' },
+                                            }
+                                            const info = codecLabels[codec] || { label: codec.toUpperCase(), category: 'standard' as const }
+
+                                            return (
+                                                <button
+                                                    key={codec}
+                                                    type="button"
+                                                    onClick={() => {
+                                                        if (isSelected) {
+                                                            // Don't allow deselecting the last codec
+                                                            if (selectedCodecs.length > 1) {
+                                                                setSelectedCodecs(selectedCodecs.filter(c => c !== codec))
+                                                            }
+                                                        } else {
+                                                            setSelectedCodecs([...selectedCodecs, codec])
+                                                        }
+                                                    }}
+                                                    className={cn(
+                                                        "px-3 py-1 rounded-full text-xs font-medium transition-all",
+                                                        "border-2",
+                                                        isSelected
+                                                            ? info.category === 'hires'
+                                                                ? "border-purple-500 bg-purple-500/20 text-purple-600 dark:text-purple-300"
+                                                                : info.category === 'spatial'
+                                                                    ? "border-blue-500 bg-blue-500/20 text-blue-600 dark:text-blue-300"
+                                                                    : "border-primary bg-primary/20 text-primary"
+                                                            : "border-transparent bg-muted/50 text-muted-foreground hover:bg-muted"
+                                                    )}
+                                                >
+                                                    {info.label}
+                                                    {isSelected && <span className="ml-1">✓</span>}
+                                                </button>
+                                            )
+                                        })}
+                                    </div>
+                                    <p className="text-[10px] text-muted-foreground">
+                                        {selectedCodecs.length} format{selectedCodecs.length !== 1 ? 's' : ''} selected
+                                    </p>
+                                </div>
+                            )}
                         </div>
                     )}
 
@@ -700,6 +827,22 @@ export function ImportView() {
                     checkServiceHealth()
                 }}
             />
-        </div>
+
+            {/* Download Queue Modal */}
+            <DownloadQueue
+                open={showQueue}
+                onClose={() => setShowQueue(false)}
+            />
+
+            {/* Wrapper Login Modal */}
+            <WrapperLoginModal
+                open={showWrapperLogin}
+                onOpenChange={setShowWrapperLogin}
+                onAuthSuccess={() => {
+                    setWrapperNeedsAuth(false)
+                    toast.success("Wrapper authenticated! ALAC/Atmos downloads enabled.")
+                }}
+            />
+        </div >
     )
 }

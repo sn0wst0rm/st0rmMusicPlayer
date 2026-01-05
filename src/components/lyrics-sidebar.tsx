@@ -1052,10 +1052,10 @@ export function LyricsSidebar() {
                 <motion.aside
                     key="lyrics-sidebar"
                     initial={{ width: 0, opacity: 0 }}
-                    animate={{ width: 320, opacity: 1 }}
+                    animate={{ width: "clamp(260px, 35vw, 320px)", opacity: 1 }}
                     exit={{ width: 0, opacity: 0 }}
                     transition={{ duration: 0.2, ease: "easeInOut" }}
-                    className="flex-shrink-0 border-l overflow-hidden flex flex-col relative h-[calc(100%-80px)]"
+                    className="flex-shrink-0 border-l overflow-hidden flex flex-col relative h-full"
                 >
                     {/* Animated gradient background - softer like player bar */}
                     <DynamicGradientBackground

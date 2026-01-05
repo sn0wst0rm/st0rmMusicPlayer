@@ -44,7 +44,7 @@ export default function RootLayout({
           disableTransitionOnChange
         >
           <ThemeColorManager />
-          <SidebarProvider className="h-full overflow-hidden">
+          <SidebarProvider className="h-[calc(100%-80px)] overflow-hidden">
             <AppSidebar />
             <SidebarInset className="relative h-full overflow-hidden bg-background text-foreground flex-1 min-w-0">
               <header className="absolute top-0 left-0 right-0 z-40 h-14 px-4 flex items-center gap-2 bg-background/60 backdrop-blur-md border-b transition-colors supports-[backdrop-filter]:bg-background/60">

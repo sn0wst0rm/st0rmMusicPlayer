@@ -51,7 +51,7 @@ export async function PUT(request: Request) {
         const {
             cookies,
             outputPath,
-            songCodec,
+            songCodecs,
             lyricsFormat,
             coverSize,
             saveCover,
@@ -69,7 +69,7 @@ export async function PUT(request: Request) {
 
         if (cookies !== undefined) updateData.cookies = cookies;
         if (outputPath !== undefined) updateData.outputPath = outputPath;
-        if (songCodec !== undefined) updateData.songCodec = songCodec;
+        if (songCodecs !== undefined) updateData.songCodecs = songCodecs;
         if (lyricsFormat !== undefined) updateData.lyricsFormat = lyricsFormat;
         if (coverSize !== undefined) updateData.coverSize = coverSize;
         if (saveCover !== undefined) updateData.saveCover = saveCover;

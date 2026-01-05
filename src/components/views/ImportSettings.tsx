@@ -43,7 +43,7 @@ interface ImportSettingsProps {
 
 interface GamdlSettings {
     outputPath: string
-    songCodec: string
+    songCodecs: string // Comma-separated list
     lyricsFormat: string
     coverSize: number
     saveCover: boolean
@@ -98,7 +98,7 @@ export function ImportSettings({ open, onOpenChange, onSettingsUpdate }: ImportS
 
             if (settings) {
                 updateData.outputPath = settings.outputPath
-                updateData.songCodec = settings.songCodec
+                updateData.songCodecs = settings.songCodecs
                 updateData.lyricsFormat = settings.lyricsFormat
                 updateData.coverSize = settings.coverSize
                 updateData.saveCover = settings.saveCover
@@ -253,21 +253,118 @@ export function ImportSettings({ open, onOpenChange, onSettingsUpdate }: ImportS
                         </p>
                     </div>
 
-                    {/* Song Codec */}
-                    <div className="space-y-2">
-                        <Label>Audio Quality</Label>
-                        <Select
-                            value={settings.songCodec}
-                            onValueChange={(value) => setSettings({ ...settings, songCodec: value })}
-                        >
-                            <SelectTrigger>
-                                <SelectValue placeholder="Select codec" />
-                            </SelectTrigger>
-                            <SelectContent>
-                                <SelectItem value="aac-legacy">AAC 256kbps (Recommended)</SelectItem>
-                                <SelectItem value="aac-he-legacy">AAC-HE 64kbps (Low quality)</SelectItem>
-                            </SelectContent>
-                        </Select>
+                    {/* Audio Formats - Multi-select */}
+                    <div className="space-y-3">
+                        <div>
+                            <Label>Audio Formats</Label>
+                            <p className="text-xs text-muted-foreground mt-1">
+                                Select which audio formats to download. Multiple formats will increase storage usage.
+                            </p>
+                        </div>
+
+                        {/* Storage estimate */}
+                        {(() => {
+                            const selectedCodecs = (settings.songCodecs || 'aac-legacy').split(',').filter(Boolean)
+                            const sizeMultipliers: Record<string, number> = {
+                                'aac-legacy': 1,
+                                'aac-he-legacy': 0.3,
+                                'aac': 1,
+                                'aac-he': 0.3,
+                                'aac-binaural': 1.2,
+                                'aac-downmix': 1,
+                                'atmos': 3,
+                                'ac3': 2.5,
+                                'alac': 4
+                            }
+                            const totalMultiplier = selectedCodecs.reduce((sum, c) => sum + (sizeMultipliers[c] || 1), 0)
+                            const estimatePerSong = Math.round(totalMultiplier * 8) // ~8MB per song for AAC
+                            return totalMultiplier > 1 ? (
+                                <div className="text-xs px-3 py-2 rounded-md bg-amber-500/10 text-amber-600 dark:text-amber-400">
+                                    Estimated size: ~{estimatePerSong}MB per song ({selectedCodecs.length} format{selectedCodecs.length > 1 ? 's' : ''})
+                                </div>
+                            ) : null
+                        })()}
+
+                        {/* Standard Codecs */}
+                        <div className="space-y-2">
+                            <span className="text-xs text-muted-foreground font-medium">Standard</span>
+                            <div className="flex flex-wrap gap-2">
+                                {[
+                                    { id: 'aac-legacy', label: 'AAC 256kbps', desc: '44.1kHz', recommended: true },
+                                    { id: 'aac-he-legacy', label: 'AAC-HE 64kbps', desc: 'Low quality' },
+                                ].map((codec) => {
+                                    const selectedList = (settings.songCodecs || 'aac-legacy').split(',').filter(Boolean)
+                                    const isSelected = selectedList.includes(codec.id)
+                                    return (
+                                        <button
+                                            key={codec.id}
+                                            type="button"
+                                            onClick={() => {
+                                                const updated = isSelected
+                                                    ? selectedList.filter(c => c !== codec.id)
+                                                    : [...selectedList, codec.id]
+                                                // Ensure at least one codec is selected
+                                                if (updated.length === 0) updated.push('aac-legacy')
+                                                setSettings({ ...settings, songCodecs: updated.join(',') })
+                                            }}
+                                            className={cn(
+                                                "px-3 py-1.5 text-xs font-medium rounded-full border transition-colors",
+                                                isSelected
+                                                    ? "bg-primary text-primary-foreground border-primary"
+                                                    : "bg-background border-border hover:bg-muted"
+                                            )}
+                                        >
+                                            {codec.label}
+                                            {codec.recommended && !isSelected && (
+                                                <span className="ml-1 text-primary">★</span>
+                                            )}
+                                        </button>
+                                    )
+                                })}
+                            </div>
+                        </div>
+
+                        {/* Hi-Res / Experimental Codecs */}
+                        <div className="space-y-2">
+                            <span className="text-xs text-amber-600 dark:text-amber-400 font-medium">Hi-Res / Spatial (Experimental)</span>
+                            <div className="flex flex-wrap gap-2">
+                                {[
+                                    { id: 'alac', label: 'Lossless', desc: 'Up to 24-bit/192kHz' },
+                                    { id: 'atmos', label: 'Dolby Atmos', desc: '768kbps spatial' },
+                                    { id: 'aac-binaural', label: 'Spatial Audio', desc: 'Binaural' },
+                                    { id: 'ac3', label: 'AC3', desc: '640kbps surround' },
+                                    { id: 'aac-downmix', label: 'Downmix', desc: 'Stereo from surround' },
+                                ].map((codec) => {
+                                    const selectedList = (settings.songCodecs || 'aac-legacy').split(',').filter(Boolean)
+                                    const isSelected = selectedList.includes(codec.id)
+                                    return (
+                                        <button
+                                            key={codec.id}
+                                            type="button"
+                                            onClick={() => {
+                                                const updated = isSelected
+                                                    ? selectedList.filter(c => c !== codec.id)
+                                                    : [...selectedList, codec.id]
+                                                if (updated.length === 0) updated.push('aac-legacy')
+                                                setSettings({ ...settings, songCodecs: updated.join(',') })
+                                            }}
+                                            className={cn(
+                                                "px-3 py-1.5 text-xs font-medium rounded-full border transition-colors",
+                                                isSelected
+                                                    ? "bg-amber-500 text-white border-amber-500"
+                                                    : "bg-background border-border hover:bg-muted"
+                                            )}
+                                            title={codec.desc}
+                                        >
+                                            {codec.label}
+                                        </button>
+                                    )
+                                })}
+                            </div>
+                            <p className="text-xs text-muted-foreground">
+                                These formats may not be available for all tracks.
+                            </p>
+                        </div>
                     </div>
 
                     {/* Lyrics Format */}

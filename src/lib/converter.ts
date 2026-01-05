@@ -1,73 +1,57 @@
-import ffmpeg from 'fluent-ffmpeg';
+/**
+ * Library Converter (Deprecated)
+ * 
+ * This module was previously used to convert m4a files to mp3.
+ * It has been replaced by the multi-codec download system where
+ * users can choose which formats to download from Apple Music.
+ * 
+ * The codecPaths field on Track now stores paths for each codec.
+ */
+
 import db from './db';
-import path from 'path';
-import fs from 'fs';
 
-export async function convertLibrary() {
-    console.log('Starting library conversion check...');
+/**
+ * Updates codecPaths for existing tracks that don't have it set.
+ * This migrates old tracks to use the new codec system.
+ */
+export async function migrateToCodecPaths() {
+    console.log('Migrating tracks to use codecPaths...');
 
-    // Find tracks with no mp3Path
-    const tracksToConvert = await db.track.findMany({
+    // Find tracks without codecPaths
+    const tracksToMigrate = await db.track.findMany({
         where: {
-            mp3Path: null,
-            filePath: {
-                not: {
-                    endsWith: '.mp3' // Don't try to convert if it's already source mp3 (logic from scanner handles this but double check)
-                }
-            }
+            codecPaths: null
         }
     });
 
-    console.log(`Found ${tracksToConvert.length} tracks needing conversion.`);
+    console.log(`Found ${tracksToMigrate.length} tracks needing migration.`);
 
-    for (const track of tracksToConvert) {
+    for (const track of tracksToMigrate) {
         try {
-            if (!track.filePath.endsWith('.mp3')) {
-                await convertTrack(track);
-            }
+            // Determine codec from file extension
+            const ext = track.filePath.toLowerCase();
+            let codec = 'aac-legacy';
+            if (ext.endsWith('.mp3')) codec = 'mp3';
+            else if (ext.endsWith('.flac')) codec = 'alac';
+            else if (ext.endsWith('.m4a')) codec = 'aac-legacy';
+            else if (ext.endsWith('.wav')) codec = 'wav';
+
+            await db.track.update({
+                where: { id: track.id },
+                data: {
+                    codecPaths: JSON.stringify({ [codec]: track.filePath })
+                }
+            });
         } catch (error) {
-            console.error(`Failed to convert track ${track.title}:`, error);
+            console.error(`Failed to migrate track ${track.title}:`, error);
         }
     }
 
-    console.log('Library conversion complete.');
+    console.log('Migration complete.');
 }
 
-async function convertTrack(track: { id: string; filePath: string; title: string }) {
-    const inputPath = track.filePath;
-    const ext = path.extname(inputPath);
-    const basename = path.basename(inputPath, ext);
-    const dir = path.dirname(inputPath);
-    const outputPath = path.join(dir, `${basename}.mp3`);
-
-    // If output already exists (e.g. from previous run but DB desync), just update DB
-    if (fs.existsSync(outputPath)) {
-        console.log(`MP3 already exists for ${track.title}, updating DB.`);
-        await db.track.update({
-            where: { id: track.id },
-            data: { mp3Path: outputPath }
-        });
-        return;
-    }
-
-    console.log(`Converting ${track.title} to MP3...`);
-
-    return new Promise<void>((resolve, reject) => {
-        ffmpeg(inputPath)
-            .toFormat('mp3')
-            .audioBitrate(320)
-            .on('end', async () => {
-                console.log(`Conversion finished: ${track.title}`);
-                await db.track.update({
-                    where: { id: track.id },
-                    data: { mp3Path: outputPath }
-                });
-                resolve();
-            })
-            .on('error', (err: Error) => {
-                console.error(`Error converting ${track.title}:`, err);
-                reject(err);
-            })
-            .save(outputPath);
-    });
+// Backward compatibility export (no-op)
+export async function convertLibrary() {
+    console.log('MP3 conversion is deprecated. Use multi-codec download settings instead.');
+    await migrateToCodecPaths();
 }

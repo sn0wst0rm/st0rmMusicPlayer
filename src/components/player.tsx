@@ -7,8 +7,10 @@ import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
 import { DynamicGradientBackground } from "@/components/ui/dynamic-gradient-background"
 import { extractColorsFromImage, getAppleMusicFallbackColors } from "@/lib/color-extraction"
-import { Play, Pause, SkipBack, SkipForward, Volume2, Shuffle, ListVideo, Repeat, Repeat1, Mic2 } from "lucide-react"
+import { Play, Pause, SkipBack, SkipForward, Volume2, Shuffle, ListVideo, Repeat, Repeat1, Mic2, Headphones } from "lucide-react"
 import { cn } from "@/lib/utils"
+import { CodecSelector } from "@/components/codec-selector"
+import { getSpatialAudioRenderer, isSpatialCodec, detectSpatialAudioSupport } from "@/lib/spatial-audio"
 
 export function Player() {
     const {
@@ -31,16 +33,29 @@ export function Player() {
         library,
         setSelectedAlbum,
         playbackProgress,
-        setPlaybackProgress
+        setPlaybackProgress,
+        currentCodec,
+        availableCodecs,
+        setCurrentCodec,
+        fetchCodecsForTrack
     } = usePlayerStore()
 
     const audioRef = React.useRef<HTMLAudioElement>(null)
     const [progress, setProgress] = React.useState(0)
     const [duration, setDuration] = React.useState(0)
     const [isCoverLoaded, setIsCoverLoaded] = React.useState(false)
+    const [showRemainingTime, setShowRemainingTime] = React.useState(false)
     const [gradientColors, setGradientColors] = React.useState<string[]>(getAppleMusicFallbackColors())
     const lastSavedProgressRef = React.useRef<number>(0)
     const hasRestoredRef = React.useRef<boolean>(false)
+    const [isCodecSwitching, setIsCodecSwitching] = React.useState(false)
+    const preloadAudioRef = React.useRef<HTMLAudioElement | null>(null)
+
+    // Spatial audio state
+    const [spatialEnabled, setSpatialEnabled] = React.useState(false)
+    const [headTrackingEnabled, setHeadTrackingEnabled] = React.useState(false)
+    const [spatialSupported, setSpatialSupported] = React.useState(false)
+    const spatialRendererRef = React.useRef<ReturnType<typeof getSpatialAudioRenderer> | null>(null)
 
     React.useEffect(() => {
         setIsCoverLoaded(false)
@@ -58,6 +73,62 @@ export function Player() {
             .then(colors => setGradientColors(colors))
             .catch(() => setGradientColors(getAppleMusicFallbackColors()))
     }, [currentTrack])
+
+    // Fetch available codecs when track changes
+    React.useEffect(() => {
+        if (currentTrack?.id) {
+            fetchCodecsForTrack(currentTrack.id)
+        }
+    }, [currentTrack?.id, fetchCodecsForTrack])
+
+    // Check spatial audio support on mount
+    React.useEffect(() => {
+        const support = detectSpatialAudioSupport()
+        setSpatialSupported(support.webAudioSupported && support.pannerSupported)
+    }, [])
+
+    // Initialize/cleanup spatial audio based on codec
+    React.useEffect(() => {
+        const isSpatial = isSpatialCodec(currentCodec)
+
+        if (isSpatial && audioRef.current && !spatialRendererRef.current) {
+            // Initialize spatial audio for spatial codecs
+            const renderer = getSpatialAudioRenderer()
+            renderer.initialize(audioRef.current).then(success => {
+                if (success) {
+                    spatialRendererRef.current = renderer
+                    setSpatialEnabled(true)
+                }
+            })
+        } else if (!isSpatial && spatialRendererRef.current) {
+            // Cleanup spatial audio when switching away from spatial codec
+            spatialRendererRef.current.destroy()
+            spatialRendererRef.current = null
+            setSpatialEnabled(false)
+            setHeadTrackingEnabled(false)
+        }
+
+        return () => {
+            // Cleanup on unmount
+            if (spatialRendererRef.current) {
+                spatialRendererRef.current.destroy()
+                spatialRendererRef.current = null
+            }
+        }
+    }, [currentCodec])
+
+    // Toggle head tracking
+    const toggleHeadTracking = async () => {
+        if (!spatialRendererRef.current) return
+
+        if (headTrackingEnabled) {
+            spatialRendererRef.current.disableHeadTracking()
+            setHeadTrackingEnabled(false)
+        } else {
+            const success = await spatialRendererRef.current.enableHeadTracking()
+            setHeadTrackingEnabled(success)
+        }
+    }
 
     React.useEffect(() => {
         if (audioRef.current) {
@@ -166,6 +237,84 @@ export function Player() {
         }
     }
 
+    // Smooth codec switching with crossfade
+    const handleCodecChange = async (newCodec: string) => {
+        if (!currentTrack || !audioRef.current || isCodecSwitching) return
+        if (newCodec === currentCodec) return
+
+        setIsCodecSwitching(true)
+        const currentTime = audioRef.current.currentTime
+        const wasPlaying = isPlaying
+        const currentVolume = audioRef.current.volume
+
+        try {
+            // Create new audio element for preloading
+            const newStreamUrl = `/api/stream/${currentTrack.id}?codec=${newCodec}`
+            const newAudio = new Audio(newStreamUrl)
+            newAudio.volume = 0
+            newAudio.currentTime = currentTime
+            preloadAudioRef.current = newAudio
+
+            // Wait for new audio to be ready
+            await new Promise<void>((resolve, reject) => {
+                const timeout = setTimeout(() => reject(new Error('Timeout')), 10000)
+                newAudio.addEventListener('canplay', () => {
+                    clearTimeout(timeout)
+                    resolve()
+                }, { once: true })
+                newAudio.addEventListener('error', () => {
+                    clearTimeout(timeout)
+                    reject(new Error('Load failed'))
+                }, { once: true })
+                newAudio.load()
+            })
+
+            // Sync position more precisely
+            newAudio.currentTime = audioRef.current.currentTime
+
+            // Quick crossfade (200ms)
+            const fadeDuration = 200
+            const fadeSteps = 20
+            const fadeInterval = fadeDuration / fadeSteps
+
+            if (wasPlaying) {
+                newAudio.play().catch(() => { })
+            }
+
+            // Fade out old, fade in new
+            for (let i = 0; i <= fadeSteps; i++) {
+                await new Promise(r => setTimeout(r, fadeInterval))
+                if (audioRef.current) {
+                    audioRef.current.volume = currentVolume * (1 - i / fadeSteps)
+                }
+                newAudio.volume = currentVolume * (i / fadeSteps)
+            }
+
+            // Pause old audio
+            audioRef.current.pause()
+
+            // Update codec state
+            setCurrentCodec(newCodec)
+
+            // Save preference to server
+            fetch(`/api/track/${currentTrack.id}/codecs`, {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ codec: newCodec })
+            }).catch(() => { })
+
+        } catch (error) {
+            console.error('Codec switch failed:', error)
+            // Restore volume on failure
+            if (audioRef.current) {
+                audioRef.current.volume = currentVolume
+            }
+        } finally {
+            setIsCodecSwitching(false)
+            preloadAudioRef.current = null
+        }
+    }
+
     const togglePlay = () => {
         setIsPlaying(!isPlaying)
     }
@@ -254,6 +403,13 @@ export function Player() {
                                 }}
                             >{currentTrack.album?.title || "Unknown Album"}</span>
                         </div>
+                        <CodecSelector
+                            trackId={currentTrack.id}
+                            currentCodec={currentCodec}
+                            availableCodecs={availableCodecs}
+                            onCodecChange={handleCodecChange}
+                            isLoading={isCodecSwitching}
+                        />
                     </div>
                 </div>
 
@@ -284,8 +440,13 @@ export function Player() {
                             {repeatMode === 'one' ? <Repeat1 className="h-4 w-4" /> : <Repeat className="h-4 w-4" />}
                         </Button>
                     </div>
-                    <div className="w-full max-w-sm flex items-center gap-2 text-xs text-muted-foreground font-variant-numeric tabular-nums">
-                        <span>{formatTime(progress)}</span>
+                    <div className="w-full max-w-sm flex items-center gap-2 text-xs text-muted-foreground tabular-nums">
+                        <span
+                            className="min-w-[32px] text-right"
+                            style={{ textShadow: '0 1px 2px rgba(0,0,0,0.15)' }}
+                        >
+                            {formatTime(progress)}
+                        </span>
                         <Slider
                             value={[progress]}
                             max={duration || 100}
@@ -293,12 +454,37 @@ export function Player() {
                             onValueChange={handleSeek}
                             className="w-full"
                         />
-                        <span>{formatTime(duration)}</span>
+                        <span
+                            className="min-w-[32px] cursor-pointer hover:text-foreground transition-colors"
+                            style={{ textShadow: '0 1px 2px rgba(0,0,0,0.15)' }}
+                            onClick={() => setShowRemainingTime(!showRemainingTime)}
+                            title={showRemainingTime ? "Show total time" : "Show remaining time"}
+                        >
+                            {showRemainingTime ? `-${formatTime(duration - progress)}` : formatTime(duration)}
+                        </span>
                     </div>
                 </div>
 
                 {/* Volume */}
                 <div className="flex items-center justify-end gap-2 w-1/3">
+                    {/* Spatial Audio / Head Tracking Toggle */}
+                    {spatialSupported && isSpatialCodec(currentCodec) && (
+                        <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={toggleHeadTracking}
+                            className={cn(
+                                "hover:text-primary relative",
+                                headTrackingEnabled && "text-blue-400"
+                            )}
+                            title={headTrackingEnabled ? "Disable Head Tracking" : "Enable Head Tracking (Spatial Audio)"}
+                        >
+                            <Headphones className="h-4 w-4" />
+                            {headTrackingEnabled && (
+                                <span className="absolute -top-0.5 -right-0.5 w-2 h-2 bg-blue-400 rounded-full animate-pulse" />
+                            )}
+                        </Button>
+                    )}
                     <Button variant="ghost" size="icon" onClick={toggleLyrics} className={cn("hover:text-primary", lyricsOpen && "text-primary")}>
                         <Mic2 className="h-4 w-4" />
                     </Button>

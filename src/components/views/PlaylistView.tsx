@@ -612,7 +612,7 @@ export function PlaylistView({ playlistId, onBack }: PlaylistViewProps) {
     }
 
     return (
-        <div className="h-full w-full overflow-auto">
+        <div className="h-full w-full overflow-auto overflow-x-hidden">
             {/* Back button */}
             <div className="sticky top-14 mt-14 z-30 bg-background/60 backdrop-blur-md border-b transition-colors supports-[backdrop-filter]:bg-background/60">
                 <Button
@@ -626,7 +626,7 @@ export function PlaylistView({ playlistId, onBack }: PlaylistViewProps) {
                 </Button>
             </div>
 
-            <div className="max-w-4xl mx-auto px-8 pt-8 pb-32">
+            <div className="w-full max-w-4xl mx-auto px-4 sm:px-6 md:px-8 pt-8 pb-32">
                 {/* Playlist Header */}
                 <div className="flex flex-col md:flex-row gap-8 mb-8">
                     {/* Cover Art */}
@@ -671,7 +671,7 @@ export function PlaylistView({ playlistId, onBack }: PlaylistViewProps) {
                     </div>
 
                     {/* Playlist Info */}
-                    <div className="flex flex-col justify-end text-center md:text-left flex-1">
+                    <div className="flex flex-col justify-end text-center md:text-left flex-1 min-w-0">
                         <p className="text-sm font-medium text-muted-foreground uppercase tracking-wider mb-1">Playlist</p>
 
                         {/* Editable Name - only if not synced */}
@@ -696,11 +696,11 @@ export function PlaylistView({ playlistId, onBack }: PlaylistViewProps) {
                                 </Button>
                             </div>
                         ) : (
-                            <div className="flex items-center gap-2 mb-2 group/name">
-                                <h1 className="text-3xl md:text-4xl font-bold tracking-tight">{playlist.name}</h1>
+                            <div className="flex flex-col sm:flex-row items-center sm:items-start md:items-center gap-2 mb-2 group/name flex-wrap">
+                                <h1 className="text-2xl sm:text-3xl md:text-4xl font-bold tracking-tight break-words min-w-0">{playlist.name}</h1>
                                 {/* Show sync indicator OR edit button, but not both */}
                                 {playlist.isSynced ? (
-                                    <span className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium text-blue-600 bg-blue-100 dark:bg-blue-900/30 dark:text-blue-400 rounded-full" title="Synced from Apple Music">
+                                    <span className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium text-blue-600 bg-blue-100 dark:bg-blue-900/30 dark:text-blue-400 rounded-full shrink-0" title="Synced from Apple Music">
                                         <CloudCog className="h-3 w-3" />
                                         Synced
                                     </span>
@@ -709,7 +709,7 @@ export function PlaylistView({ playlistId, onBack }: PlaylistViewProps) {
                                         variant="ghost"
                                         size="icon"
                                         onClick={() => setIsEditingName(true)}
-                                        className="h-8 w-8 opacity-0 group-hover/name:opacity-100 transition-opacity"
+                                        className="h-8 w-8 opacity-0 group-hover/name:opacity-100 transition-opacity shrink-0"
                                     >
                                         <Pencil className="h-4 w-4" />
                                     </Button>
