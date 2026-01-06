@@ -36,35 +36,54 @@ export async function GET(
         return new NextResponse('Track not found', { status: 404 });
     }
 
-    // Determine which file to stream
-    let filePath = track.filePath;
+    // Determine which file to stream - prioritize codecPaths over legacy filePath
+    let filePath: string | null = null;
+    let codecPaths: Record<string, string> = {};
 
-    // If codec is requested and we have codecPaths, use the specific codec file
-    if (requestedCodec && track.codecPaths) {
+    // Parse codecPaths if available
+    if (track.codecPaths) {
         try {
-            const codecPaths = JSON.parse(track.codecPaths) as Record<string, string>;
-            if (codecPaths[requestedCodec] && fs.existsSync(codecPaths[requestedCodec])) {
-                filePath = codecPaths[requestedCodec];
-            }
+            codecPaths = JSON.parse(track.codecPaths) as Record<string, string>;
         } catch (e) {
-            // Fallback to default filePath
-        }
-    } else if (track.preferredCodec && track.codecPaths) {
-        // Use preferred codec if set
-        try {
-            const codecPaths = JSON.parse(track.codecPaths) as Record<string, string>;
-            if (codecPaths[track.preferredCodec] && fs.existsSync(codecPaths[track.preferredCodec])) {
-                filePath = codecPaths[track.preferredCodec];
-            }
-        } catch (e) {
-            // Fallback to default filePath
+            // Invalid JSON, treat as empty
         }
     }
 
-    if (!fs.existsSync(filePath)) {
+    // Priority 1: Use explicitly requested codec
+    if (requestedCodec && codecPaths[requestedCodec]) {
+        if (fs.existsSync(codecPaths[requestedCodec])) {
+            filePath = codecPaths[requestedCodec];
+        }
+    }
+
+    // Priority 2: Use preferred codec if set
+    if (!filePath && track.preferredCodec && codecPaths[track.preferredCodec]) {
+        if (fs.existsSync(codecPaths[track.preferredCodec])) {
+            filePath = codecPaths[track.preferredCodec];
+        }
+    }
+
+    // Priority 3: Use first available valid codec from codecPaths
+    if (!filePath && Object.keys(codecPaths).length > 0) {
+        for (const codec of Object.keys(codecPaths)) {
+            if (fs.existsSync(codecPaths[codec])) {
+                filePath = codecPaths[codec];
+                break;
+            }
+        }
+    }
+
+    // Priority 4: Fall back to legacy filePath (for old tracks without codecPaths)
+    if (!filePath && track.filePath && fs.existsSync(track.filePath)) {
+        filePath = track.filePath;
+    }
+
+    // Guard: filePath must be set and exist at this point
+    if (!filePath || !fs.existsSync(filePath)) {
         return new NextResponse('File not found on disk', { status: 404 });
     }
 
+    // Stream the file directly - browser handles codec compatibility
     const stat = fs.statSync(filePath);
     const fileSize = stat.size;
     const contentType = getContentType(filePath);
@@ -77,8 +96,6 @@ export async function GET(
         const chunksize = (end - start) + 1;
         const file = fs.createReadStream(filePath, { start, end });
 
-        // Convert stream to ReadableStream for web response
-        // Node stream to Web stream
         const readable = new ReadableStream({
             start(controller) {
                 file.on('data', (chunk) => {
@@ -109,36 +126,36 @@ export async function GET(
                 'Content-Type': contentType,
             },
         });
-    } else {
-        const file = fs.createReadStream(filePath);
-
-        const readable = new ReadableStream({
-            start(controller) {
-                file.on('data', (chunk) => {
-                    try {
-                        controller.enqueue(chunk);
-                    } catch (e) {
-                        file.destroy();
-                    }
-                });
-                file.on('end', () => {
-                    try { controller.close(); } catch (e) { }
-                });
-                file.on('error', (err) => {
-                    try { controller.error(err); } catch (e) { }
-                });
-            },
-            cancel() {
-                file.destroy();
-            }
-        });
-
-        return new NextResponse(readable, {
-            status: 200,
-            headers: {
-                'Content-Length': fileSize.toString(),
-                'Content-Type': contentType,
-            },
-        });
     }
+
+    // Full file request
+    const file = fs.createReadStream(filePath);
+    const readable = new ReadableStream({
+        start(controller) {
+            file.on('data', (chunk) => {
+                try {
+                    controller.enqueue(chunk);
+                } catch (e) {
+                    file.destroy();
+                }
+            });
+            file.on('end', () => {
+                try { controller.close(); } catch (e) { }
+            });
+            file.on('error', (err) => {
+                try { controller.error(err); } catch (e) { }
+            });
+        },
+        cancel() {
+            file.destroy();
+        }
+    });
+
+    return new NextResponse(readable, {
+        headers: {
+            'Content-Length': fileSize.toString(),
+            'Content-Type': contentType,
+            'Accept-Ranges': 'bytes',
+        },
+    });
 }

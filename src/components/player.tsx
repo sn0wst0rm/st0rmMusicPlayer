@@ -59,6 +59,11 @@ export function Player() {
 
     React.useEffect(() => {
         setIsCoverLoaded(false)
+        // Reset progress and duration when track changes
+        setProgress(0)
+        setDuration(0)
+        // Reset hasRestored so we don't restore old position on new tracks
+        hasRestoredRef.current = false
     }, [currentTrack])
 
     // Extract colors from cover art when track changes
@@ -182,11 +187,18 @@ export function Player() {
     const handleTimeUpdate = () => {
         if (audioRef.current) {
             const currentTime = audioRef.current.currentTime
-            setProgress(currentTime)
-            setDuration(audioRef.current.duration || 0)
+            const audioDuration = audioRef.current.duration
+
+            // Guard against NaN/Infinity values
+            if (isFinite(currentTime)) {
+                setProgress(currentTime)
+            }
+            if (isFinite(audioDuration) && audioDuration > 0) {
+                setDuration(audioDuration)
+            }
 
             // Save progress to store every 5 seconds (throttled)
-            if (Math.abs(currentTime - lastSavedProgressRef.current) >= 5) {
+            if (isFinite(currentTime) && Math.abs(currentTime - lastSavedProgressRef.current) >= 5) {
                 setPlaybackProgress(currentTime)
                 lastSavedProgressRef.current = currentTime
             }
@@ -237,64 +249,142 @@ export function Player() {
         }
     }
 
-    // Smooth codec switching with crossfade
+    // Pre-flight test: Check if codec is playable in this browser
+    // Uses a temporary Audio element to test WITHOUT switching the main player
+    const testCodecPlayability = async (trackId: string, codec: string): Promise<boolean> => {
+        return new Promise((resolve) => {
+            const testAudio = new Audio()
+            const testUrl = `/api/stream/${trackId}?codec=${codec}`
+
+            const timeout = setTimeout(() => {
+                testAudio.src = ''
+                resolve(false) // Timeout = not playable
+            }, 3000)
+
+            const handleCanPlay = () => {
+                clearTimeout(timeout)
+                cleanup()
+                resolve(true)
+            }
+
+            const handleError = () => {
+                clearTimeout(timeout)
+                cleanup()
+                resolve(false)
+            }
+
+            const cleanup = () => {
+                testAudio.removeEventListener('canplay', handleCanPlay)
+                testAudio.removeEventListener('error', handleError)
+                testAudio.src = ''
+            }
+
+            testAudio.addEventListener('canplay', handleCanPlay)
+            testAudio.addEventListener('error', handleError)
+            testAudio.preload = 'metadata'
+            testAudio.src = testUrl
+        })
+    }
+
+    // Codec switching - updates audio source directly
+    // This is for switching codec on the SAME track (preserves position)
     const handleCodecChange = async (newCodec: string) => {
         if (!currentTrack || !audioRef.current || isCodecSwitching) return
         if (newCodec === currentCodec) return
 
         setIsCodecSwitching(true)
-        const currentTime = audioRef.current.currentTime
+
+        // Capture current state BEFORE any changes
+        const savedTime = audioRef.current.currentTime
+        const savedDuration = audioRef.current.duration
         const wasPlaying = isPlaying
-        const currentVolume = audioRef.current.volume
+        const savedVolume = audioRef.current.volume
+        const previousCodec = currentCodec
 
         try {
-            // Create new audio element for preloading
-            const newStreamUrl = `/api/stream/${currentTrack.id}?codec=${newCodec}`
-            const newAudio = new Audio(newStreamUrl)
-            newAudio.volume = 0
-            newAudio.currentTime = currentTime
-            preloadAudioRef.current = newAudio
+            // PRE-FLIGHT TEST: Check if new codec is playable before switching
+            const isPlayable = await testCodecPlayability(currentTrack.id, newCodec)
 
-            // Wait for new audio to be ready
-            await new Promise<void>((resolve, reject) => {
-                const timeout = setTimeout(() => reject(new Error('Timeout')), 10000)
-                newAudio.addEventListener('canplay', () => {
-                    clearTimeout(timeout)
-                    resolve()
-                }, { once: true })
-                newAudio.addEventListener('error', () => {
-                    clearTimeout(timeout)
-                    reject(new Error('Load failed'))
-                }, { once: true })
-                newAudio.load()
-            })
-
-            // Sync position more precisely
-            newAudio.currentTime = audioRef.current.currentTime
-
-            // Quick crossfade (200ms)
-            const fadeDuration = 200
-            const fadeSteps = 20
-            const fadeInterval = fadeDuration / fadeSteps
-
-            if (wasPlaying) {
-                newAudio.play().catch(() => { })
+            if (!isPlayable) {
+                // Show toast notification for unsupported codec
+                const { toast } = await import('sonner')
+                toast.error(`${newCodec.toUpperCase()} is not supported in this browser`, {
+                    description: 'Try Safari for full codec support, or select a different format.'
+                })
+                setIsCodecSwitching(false)
+                return // Don't switch - keep current codec
             }
 
-            // Fade out old, fade in new
-            for (let i = 0; i <= fadeSteps; i++) {
-                await new Promise(r => setTimeout(r, fadeInterval))
-                if (audioRef.current) {
-                    audioRef.current.volume = currentVolume * (1 - i / fadeSteps)
-                }
-                newAudio.volume = currentVolume * (i / fadeSteps)
-            }
-
-            // Pause old audio
+            // Test passed - proceed with switch
+            // Stop current playback safely
             audioRef.current.pause()
+            audioRef.current.removeAttribute('src')
+            audioRef.current.load()
 
-            // Update codec state
+            // Update codec state - triggers re-render with new streamUrl
             setCurrentCodec(newCodec)
+
+            // Wait for React to update the DOM
+            await new Promise(resolve => setTimeout(resolve, 100))
+
+            // Reload audio with new source
+            if (audioRef.current) {
+                audioRef.current.load()
+
+                // Wait for audio to be playable
+                await new Promise<void>((resolve) => {
+                    const timeout = setTimeout(() => resolve(), 8000)
+
+                    const handleCanPlay = () => {
+                        clearTimeout(timeout)
+                        audioRef.current?.removeEventListener('canplay', handleCanPlay)
+                        audioRef.current?.removeEventListener('error', handleError)
+                        resolve()
+                    }
+
+                    const handleError = () => {
+                        clearTimeout(timeout)
+                        audioRef.current?.removeEventListener('canplay', handleCanPlay)
+                        audioRef.current?.removeEventListener('error', handleError)
+                        resolve()
+                    }
+
+                    audioRef.current?.addEventListener('canplay', handleCanPlay)
+                    audioRef.current?.addEventListener('error', handleError)
+                })
+
+                // Restore position (guard against NaN/Infinity)
+                if (isFinite(savedTime) && savedTime > 0 && isFinite(savedDuration)) {
+                    audioRef.current.currentTime = Math.min(savedTime, savedDuration - 0.5)
+                }
+
+                // Restore volume
+                audioRef.current.volume = savedVolume
+
+                // Resume playback if was playing
+                if (wasPlaying && audioRef.current) {
+                    await audioRef.current.play().catch(e => {
+                        if (e.name !== 'AbortError') {
+                            console.error('Playback failed after codec switch:', e)
+                        }
+                    })
+                }
+
+                // Re-register media session to fix controls
+                if ("mediaSession" in navigator && currentTrack) {
+                    navigator.mediaSession.metadata = new MediaMetadata({
+                        title: currentTrack.title,
+                        artist: currentTrack.artist?.name || "Unknown Artist",
+                        album: currentTrack.album?.title || "Unknown Album",
+                        artwork: [
+                            { src: `/api/cover/${currentTrack.id}?size=small`, sizes: "96x96", type: "image/jpeg" },
+                            { src: `/api/cover/${currentTrack.id}?size=medium`, sizes: "256x256", type: "image/jpeg" },
+                            { src: `/api/cover/${currentTrack.id}?size=large`, sizes: "512x512", type: "image/jpeg" },
+                        ]
+                    })
+                    navigator.mediaSession.playbackState = wasPlaying ? 'playing' : 'paused'
+                }
+            }
 
             // Save preference to server
             fetch(`/api/track/${currentTrack.id}/codecs`, {
@@ -305,13 +395,12 @@ export function Player() {
 
         } catch (error) {
             console.error('Codec switch failed:', error)
-            // Restore volume on failure
-            if (audioRef.current) {
-                audioRef.current.volume = currentVolume
+            // Restore previous codec on failure
+            if (previousCodec) {
+                setCurrentCodec(previousCodec)
             }
         } finally {
             setIsCodecSwitching(false)
-            preloadAudioRef.current = null
         }
     }
 
@@ -336,9 +425,11 @@ export function Player() {
         )
     }
 
-    // Construct stream URL
-    // If we have an ID, we use the stream endpoint
-    const streamUrl = `/api/stream/${currentTrack.id}`
+    // Construct stream URL with current codec
+    // If we have an ID, we use the stream endpoint with codec parameter
+    const streamUrl = currentCodec
+        ? `/api/stream/${currentTrack.id}?codec=${currentCodec}`
+        : `/api/stream/${currentTrack.id}`
 
     return (
         <div className="h-20 border-t fixed bottom-0 left-0 right-0 z-50 shadow-lg overflow-hidden">
