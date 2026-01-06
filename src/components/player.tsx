@@ -37,7 +37,8 @@ export function Player() {
         currentCodec,
         availableCodecs,
         setCurrentCodec,
-        fetchCodecsForTrack
+        fetchCodecsForTrack,
+        queue
     } = usePlayerStore()
 
     const audioRef = React.useRef<HTMLAudioElement>(null)
@@ -49,6 +50,8 @@ export function Player() {
     const lastSavedProgressRef = React.useRef<number>(0)
     const hasRestoredRef = React.useRef<boolean>(false)
     const [isCodecSwitching, setIsCodecSwitching] = React.useState(false)
+    // Track which track+codec combo is validated to prevent loading unvalidated codecs
+    const [validatedState, setValidatedState] = React.useState<{ trackId: string; codec: string } | null>(null)
     const preloadAudioRef = React.useRef<HTMLAudioElement | null>(null)
 
     // Spatial audio state
@@ -57,11 +60,30 @@ export function Player() {
     const [spatialSupported, setSpatialSupported] = React.useState(false)
     const spatialRendererRef = React.useRef<ReturnType<typeof getSpatialAudioRenderer> | null>(null)
 
+    // Ref to track first render - skip track reset on initial mount for position restoration
+    const isFirstRenderRef = React.useRef(true)
+
     React.useEffect(() => {
+        // Skip on initial mount to allow position restoration on page reload
+        if (isFirstRenderRef.current) {
+            isFirstRenderRef.current = false
+            return
+        }
+
         setIsCoverLoaded(false)
-        // Reset progress and duration when track changes
+        // Reset progress and duration when track changes (but not on initial mount)
         setProgress(0)
         setDuration(0)
+        // Reset saved progress tracking
+        lastSavedProgressRef.current = 0
+        // Stop and clear audio element to prevent old track from playing
+        if (audioRef.current) {
+            audioRef.current.pause()
+            audioRef.current.removeAttribute('src')
+            audioRef.current.load() // Force element to reset
+            audioRef.current.currentTime = 0
+        }
+        // Don't need to reset validatedState - it's checked against current trackId
         // Reset hasRestored so we don't restore old position on new tracks
         hasRestoredRef.current = false
     }, [currentTrack])
@@ -86,7 +108,165 @@ export function Player() {
         }
     }, [currentTrack?.id, fetchCodecsForTrack])
 
-    // Check spatial audio support on mount
+    // Validate and auto-select best playable codec when track changes or availableCodecs load
+    React.useEffect(() => {
+        if (!currentTrack || availableCodecs.length === 0) return
+
+        // Skip if this exact combo is already validated
+        if (currentCodec && validatedState?.trackId === currentTrack.id &&
+            validatedState?.codec === currentCodec) {
+            return // Already validated
+        }
+
+        const validateAndSelectBestCodec = async () => {
+            // CHECK PRE-CACHE FIRST - if we already validated this track's codec, use it
+            const cachedCodec = nextTrackCacheRef.current.get(currentTrack.id)
+            if (cachedCodec && availableCodecs.includes(cachedCodec)) {
+                // Remove from cache so the NEW next track can be cached
+                nextTrackCacheRef.current.delete(currentTrack.id)
+
+                // Set validated state BEFORE changing codec to prevent re-validation
+                setValidatedState({ trackId: currentTrack.id, codec: cachedCodec })
+
+                if (cachedCodec !== currentCodec) {
+                    // Switch to the cached codec
+                    setCurrentCodec(cachedCodec)
+                }
+                return
+            }
+
+            // Get codec priority from store
+            const { codecPriority } = usePlayerStore.getState()
+
+            // Determine which codec to test - use currentCodec or select from priority
+            let codecToTest = currentCodec
+            if (!codecToTest || !availableCodecs.includes(codecToTest)) {
+                for (const codec of codecPriority) {
+                    if (availableCodecs.includes(codec)) {
+                        codecToTest = codec
+                        break
+                    }
+                }
+                if (!codecToTest) {
+                    codecToTest = availableCodecs[0]
+                }
+            }
+
+            // Test if codec is playable
+            const isCurrentPlayable = await testCodecPlayability(currentTrack.id, codecToTest)
+
+            if (isCurrentPlayable) {
+                setValidatedState({ trackId: currentTrack.id, codec: codecToTest })
+                if (codecToTest !== currentCodec) {
+                    setCurrentCodec(codecToTest)
+                }
+                return
+            }
+
+
+
+            // Find first playable codec from priority list
+            for (const codec of codecPriority) {
+                if (!availableCodecs.includes(codec)) continue
+                if (codec === codecToTest) continue // Skip the one we just tested
+
+                const isPlayable = await testCodecPlayability(currentTrack.id, codec)
+                if (isPlayable) {
+                    setValidatedState({ trackId: currentTrack.id, codec })
+                    setCurrentCodec(codec)
+                    return
+                }
+            }
+
+            // If no priority codec works, try all available
+            for (const codec of availableCodecs) {
+                if (codec === codecToTest) continue
+
+                const isPlayable = await testCodecPlayability(currentTrack.id, codec)
+                if (isPlayable) {
+                    setValidatedState({ trackId: currentTrack.id, codec })
+                    setCurrentCodec(codec)
+                    return
+                }
+            }
+
+            // No playable codec found - show error
+            import('sonner').then(({ toast }) => {
+                toast.error('No compatible audio codec available', {
+                    description: 'This track cannot be played in your browser. Try Safari for full codec support.'
+                })
+            })
+        }
+
+        validateAndSelectBestCodec()
+    }, [currentTrack?.id, currentCodec, availableCodecs, setCurrentCodec, validatedState])
+
+    // Pre-cache: Store validated codec for next track to speed up skipping
+    const nextTrackCacheRef = React.useRef<Map<string, string>>(new Map())
+
+    // Pre-validate next track in queue for faster skipping
+    React.useEffect(() => {
+        // Only pre-cache when current track is validated
+        const isValid = validatedState?.trackId === currentTrack?.id &&
+            validatedState?.codec === currentCodec
+        if (!isValid || queue.length === 0) return
+
+        const nextTrackInQueue = queue[0]?.track
+        if (!nextTrackInQueue) return
+
+        // Skip if already cached
+        if (nextTrackCacheRef.current.has(nextTrackInQueue.id)) return
+
+        const preValidateNextTrack = async () => {
+            try {
+                // Fetch codecs for next track
+                const res = await fetch(`/api/track/${nextTrackInQueue.id}/codecs`)
+                if (!res.ok) return
+
+                const data = await res.json()
+                const available: string[] = data.available || []
+                if (available.length === 0) return
+
+                // Get priority list
+                const { codecPriority } = usePlayerStore.getState()
+
+                // Find first playable codec for next track
+                for (const codec of codecPriority) {
+                    if (!available.includes(codec)) continue
+
+                    const isPlayable = await testCodecPlayability(nextTrackInQueue.id, codec)
+                    if (isPlayable) {
+                        nextTrackCacheRef.current.set(nextTrackInQueue.id, codec)
+                        return
+                    }
+                }
+
+                // Fallback to any available
+                for (const codec of available) {
+                    const isPlayable = await testCodecPlayability(nextTrackInQueue.id, codec)
+                    if (isPlayable) {
+                        nextTrackCacheRef.current.set(nextTrackInQueue.id, codec)
+                        return
+                    }
+                }
+            } catch (e) {
+                console.error('Pre-cache failed for next track:', e)
+            }
+        }
+
+        preValidateNextTrack()
+    }, [queue, validatedState, currentTrack?.id, currentCodec])
+
+    // Clear pre-cache when queue changes significantly
+    React.useEffect(() => {
+        // Keep only entries that are still in queue
+        const queueIds = new Set(queue.map((q: { track: { id: string } }) => q.track.id))
+        nextTrackCacheRef.current.forEach((_, key) => {
+            if (!queueIds.has(key)) {
+                nextTrackCacheRef.current.delete(key)
+            }
+        })
+    }, [queue])
     React.useEffect(() => {
         const support = detectSpatialAudioSupport()
         setSpatialSupported(support.webAudioSupported && support.pannerSupported)
@@ -135,15 +315,25 @@ export function Player() {
         }
     }
 
+    // Only control play/pause when codec is validated
     React.useEffect(() => {
-        if (audioRef.current) {
-            if (isPlaying) {
-                audioRef.current.play().catch(e => console.error("Play failed", e))
-            } else {
-                audioRef.current.pause()
-            }
+        if (!audioRef.current) return
+
+        // Only control playback when we have a validated codec for current track
+        const isValid = validatedState?.trackId === currentTrack?.id &&
+            validatedState?.codec === currentCodec
+        if (!isValid) return
+
+        if (isPlaying) {
+            audioRef.current.play().catch(e => {
+                if (e.name !== 'AbortError') {
+                    console.error("Play failed", e)
+                }
+            })
+        } else {
+            audioRef.current.pause()
         }
-    }, [isPlaying, currentTrack])
+    }, [isPlaying, validatedState, currentTrack?.id, currentCodec])
 
     React.useEffect(() => {
         if (audioRef.current) {
@@ -205,25 +395,72 @@ export function Player() {
         }
     }
 
-    // Restore playback position after page reload (runs once)
+    // Restore playback position ONLY on page reload (not on track change)
+    // Track if this is the initial mount with a track from persisted state
+    const isInitialMountRef = React.useRef(true)
+    const initialTrackIdRef = React.useRef<string | null>(null)
+
+    // Capture the initial track ID on first render with a track
+    React.useEffect(() => {
+        if (isInitialMountRef.current && currentTrack?.id && playbackProgress > 0) {
+            initialTrackIdRef.current = currentTrack.id
+        }
+        // Mark as no longer initial mount after first track change
+        if (currentTrack?.id && isInitialMountRef.current) {
+            // Delay marking as non-initial to allow restoration effect to run
+            const timer = setTimeout(() => {
+                isInitialMountRef.current = false
+            }, 100)
+            return () => clearTimeout(timer)
+        }
+    }, [currentTrack?.id, playbackProgress])
+
     React.useEffect(() => {
         if (hasRestoredRef.current) return
-        if (audioRef.current && currentTrack && playbackProgress > 0) {
-            // Wait for audio to be ready before seeking
-            const handleCanPlay = () => {
-                if (audioRef.current && playbackProgress > 0 && !hasRestoredRef.current) {
+        if (!audioRef.current || !currentTrack || playbackProgress <= 0) return
+
+        // Only restore if we captured an initial track ID (page reload case)
+        // and we're still on that same track
+        if (!initialTrackIdRef.current) {
+            return
+        }
+
+        if (initialTrackIdRef.current !== currentTrack.id) {
+            hasRestoredRef.current = true
+            return
+        }
+
+        // Check if codec is validated
+        const isValid = validatedState?.trackId === currentTrack.id &&
+            validatedState?.codec === currentCodec
+        if (!isValid) {
+            return
+        }
+
+
+
+        // Wait for audio to be ready before seeking
+        const handleCanPlay = () => {
+            if (audioRef.current && playbackProgress > 0 && !hasRestoredRef.current) {
+                const dur = audioRef.current.duration
+                // Only restore if position is valid and less than duration
+                if (isFinite(dur) && playbackProgress < dur - 1) {
                     audioRef.current.currentTime = playbackProgress
                     setProgress(playbackProgress)
-                    hasRestoredRef.current = true
-                    // Don't auto-play, just position - user must click play
                 }
+                hasRestoredRef.current = true
             }
+        }
+
+        if (audioRef.current.readyState >= 3) {
+            handleCanPlay()
+        } else {
             audioRef.current.addEventListener('canplay', handleCanPlay, { once: true })
             return () => {
                 audioRef.current?.removeEventListener('canplay', handleCanPlay)
             }
         }
-    }, [currentTrack, playbackProgress])
+    }, [currentTrack?.id, playbackProgress, validatedState, currentCodec])
 
     // Save progress on page unload
     React.useEffect(() => {
@@ -425,11 +662,14 @@ export function Player() {
         )
     }
 
-    // Construct stream URL with current codec
-    // If we have an ID, we use the stream endpoint with codec parameter
-    const streamUrl = currentCodec
+    // Only allow audio to load when this exact track+codec combo is validated
+    const isValidForPlayback = validatedState?.trackId === currentTrack.id &&
+        validatedState?.codec === currentCodec
+
+    // Construct stream URL with current codec - only set when validated
+    const streamUrl = isValidForPlayback
         ? `/api/stream/${currentTrack.id}?codec=${currentCodec}`
-        : `/api/stream/${currentTrack.id}`
+        : undefined // Don't load until codec is validated
 
     return (
         <div className="h-20 border-t fixed bottom-0 left-0 right-0 z-50 shadow-lg overflow-hidden">
