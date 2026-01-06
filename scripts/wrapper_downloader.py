@@ -34,7 +34,10 @@ CODEC_STREAM_PATTERNS = {
     SongCodec.AAC_HE: ["audio-HE-stereo-64"],
     SongCodec.AAC_BINAURAL: ["audio-stereo-256-binaural"],
     SongCodec.AAC_DOWNMIX: ["audio-stereo-256-downmix"],
+    SongCodec.AAC_HE_BINAURAL: ["audio-HE-stereo-64-binaural"],
+    SongCodec.AAC_HE_DOWNMIX: ["audio-HE-stereo-64-downmix"],
 }
+
 
 
 class WrapperSongDownloader:
@@ -208,9 +211,12 @@ class WrapperSongDownloader:
         logger.info(f"Downloaded {len(encrypted_data):,} bytes")
         
         # 7. Save encrypted file to temp location
-        temp_dir = Path(tempfile.gettempdir()) / "wrapper_downloads"
+        # Use unique path to avoid collisions with parallel downloads
+        import time
+        unique_suffix = f"{track_id}_{self.codec.value}_{int(time.time() * 1000)}"
+        temp_dir = Path(tempfile.gettempdir()) / "wrapper_downloads" / unique_suffix
         temp_dir.mkdir(parents=True, exist_ok=True)
-        encrypted_path = temp_dir / f"{track_id}_encrypted.m4a"
+        encrypted_path = temp_dir / f"encrypted.m4a"
         encrypted_path.write_bytes(encrypted_data)
         
         # 8. Prepare output path

@@ -217,7 +217,9 @@ async def handle_ws_message(data: dict, websocket) -> Optional[dict]:
 async def broadcast_ws_event(event_type: str, data: dict):
     """Broadcast an event to all connected WebSocket clients."""
     client_count = len(_ws_clients)
-    print(f"[WS BROADCAST] {event_type} -> {client_count} clients", flush=True)
+    # Only log non-progress events to reduce console spam
+    if event_type != "download_progress":
+        print(f"[WS BROADCAST] {event_type} -> {client_count} clients", flush=True)
     
     if not _ws_clients:
         return
@@ -1430,6 +1432,9 @@ def parse_webplayback_codecs(webplayback_data: dict, song_attributes: dict = Non
         'ibhp64': 'aac-he-binaural',
         'aac256': 'aac-legacy',
         'aac64': 'aac-he-legacy',
+        # Downmix variants
+        'dbhp256': 'aac-downmix',
+        'dbhp64': 'aac-he-downmix',
     }
     
     codecs = set()
@@ -1454,9 +1459,17 @@ def parse_webplayback_codecs(webplayback_data: dict, song_attributes: dict = Non
             elif 'alac' in flavor.lower():
                 codecs.add('alac')
             elif 'binaural' in flavor.lower() or 'ibhp' in flavor.lower():
-                codecs.add('aac-binaural')
-            elif 'downmix' in flavor.lower():
-                codecs.add('aac-downmix')
+                # Distinguish between standard and HE binaural
+                if 'he' in flavor.lower() or '64' in flavor:
+                    codecs.add('aac-he-binaural')
+                else:
+                    codecs.add('aac-binaural')
+            elif 'downmix' in flavor.lower() or 'dbhp' in flavor.lower():
+                # Distinguish between standard and HE downmix
+                if 'he' in flavor.lower() or '64' in flavor:
+                    codecs.add('aac-he-downmix')
+                else:
+                    codecs.add('aac-downmix')
             elif 'ac3' in flavor.lower():
                 codecs.add('ac3')
     
@@ -1483,10 +1496,11 @@ def parse_webplayback_codecs(webplayback_data: dict, song_attributes: dict = Non
     
     # Sort by quality preference (standard -> hires -> spatial)
     CODEC_ORDER = ['aac-legacy', 'aac-he-legacy', 'aac', 'aac-he', 'alac', 
-                   'aac-binaural', 'aac-he-binaural', 'aac-downmix', 'atmos', 'ac3']
+                   'aac-binaural', 'aac-he-binaural', 'aac-downmix', 'aac-he-downmix', 'atmos', 'ac3']
     sorted_codecs = sorted(list(codecs), key=lambda c: CODEC_ORDER.index(c) if c in CODEC_ORDER else 99)
     
     return sorted_codecs
+
 
 
 async def create_temp_cookies_file(cookies_content: str) -> str:
@@ -3089,10 +3103,11 @@ async def download_song(request: DownloadRequest):
                     "album": track_info["album"],
                     "current": i + 1,
                     "total": total_tracks,
+                    "codecs": codec_list, # Add codecs list
                 }))
                 
-                # Perform download for each codec
-                print(f"[DEBUG] Processing codecs: {codec_list} for track {i + 1}...", flush=True)
+                # Perform download for each codec IN PARALLEL
+                print(f"[DEBUG] Processing codecs: {codec_list} for track {i + 1} (PARALLEL)...", flush=True)
                 
                 import copy
                 import shutil
@@ -3102,7 +3117,14 @@ async def download_song(request: DownloadRequest):
                 primary_download_item = download_item
                 codec_paths_map = {}
                 
-                for codec_idx, codec_name in enumerate(codec_list):
+                # Create a PRISTINE copy of download_item BEFORE any downloads
+                # This ensures gamdl-path downloads get unmodified stream_info
+                pristine_download_item = copy.deepcopy(download_item)
+                
+                # Define async function for downloading a single codec
+                async def download_single_codec(codec_idx: int, codec_name: str):
+                    """Download a single codec and return (codec_name, final_path or None, error or None)"""
+                    # Note: Uses pristine_download_item from closure (immutable reference)
                     try:
                         # Use a specific staging directory for this codec to prevent collisions
                         # and allow us to rename before moving to final destination
@@ -3136,9 +3158,18 @@ async def download_song(request: DownloadRequest):
                                 no_synced_lyrics=True, # Custom logic handles lyrics
                             )
                         else:
+                            # Create a COMPLETELY FRESH interface chain for each gamdl-path download
+                            # to avoid shared state corruption between sequential downloads
+                            # The APIs cache track format info that gets modified after download
+                            fresh_itunes_api = ItunesApi(
+                                apple_music_api.storefront,
+                                apple_music_api.language,
+                            )
+                            fresh_interface = AppleMusicInterface(apple_music_api, fresh_itunes_api)
+                            fresh_song_interface = AppleMusicSongInterface(fresh_interface)
                             c_song_dl = AppleMusicSongDownloader(
                                 base_downloader=c_base_dl,
-                                interface=song_interface,
+                                interface=fresh_song_interface,
                                 codec=SongCodec(codec_name),
                                 synced_lyrics_format=lyrics_format_enum if lyrics_format_enum else SyncedLyricsFormat.LRC,
                                 no_synced_lyrics=True, # Custom logic handles lyrics
@@ -3155,13 +3186,12 @@ async def download_song(request: DownloadRequest):
                             uploaded_video_downloader=c_uv_dl,
                         )
                         
-                        # Clone item to avoid side effects
-                        c_item = copy.copy(download_item)
+                        # Clone from PRISTINE copy to avoid mutations from parallel downloads
+                        c_item = copy.deepcopy(pristine_download_item)
                         
-                        # Regenerate random_uuid and staged_path using the per-codec downloader
-                        # The original item has paths based on the main downloader's temp_path (/tmp),
-                        # but we need paths in the per-codec staging directory
+                        # Regenerate random_uuid using the per-codec downloader
                         c_item.random_uuid = c_base_dl.get_random_uuid()
+                        # Note: stream_info clearing for non-primary codecs is handled later at line ~3289
                         if c_item.stream_info and c_item.stream_info.file_format:
                             c_item.staged_path = c_base_dl.get_temp_path(
                                 c_item.media_metadata["id"],
@@ -3179,6 +3209,13 @@ async def download_song(request: DownloadRequest):
                             )
                         
                         print(f"[DEBUG] Downloading {codec_name}...", flush=True)
+
+                        # Broadcast specific codec start event
+                        asyncio.create_task(broadcast_ws_event("download_codec_started", {
+                            "track_id": track_info["track_id"],
+                            "codec": codec_name,
+                            "current": i + 1
+                        }))
                         
                         # For wrapper codecs, bypass gamdl's AppleMusicDownloader.download()
                         # which expects an external amdecrypt executable.
@@ -3227,6 +3264,8 @@ async def download_song(request: DownloadRequest):
                                         "eta_seconds": eta_seconds,
                                         "current": i + 1,
                                         "total": total_tracks,
+                                        "codec": codec_name,  # Add codec info
+                                        "codecs": codec_list  # Add full codec list for context
                                     }),
                                     main_loop
                                 )
@@ -3238,28 +3277,59 @@ async def download_song(request: DownloadRequest):
                             
                             c_result = c_item
                         else:
-                            # Refresh stream info for this codec since c_item has info for primary codec
-                            # Only refresh/clear stream info if this is NOT the primary codec
-                            if codec_idx > 0:
-                                c_item.stream_info = None
-                                c_item.decryption_key = None
+                            # Create a FRESH DownloadItem for this specific codec
+                            # The song_downloader (c_song_dl) is configured with the correct codec
+                            # so get_single_download_item_no_filter will fetch correct stream_info
+                            fresh_item = await c_downloader.get_single_download_item_no_filter(
+                                c_item.media_metadata,
+                                c_item.playlist_metadata,
+                            )
                             
-                            # Reset final_path to force gamdl to calculate it based on our staging_dir
-                            # But we must provide a string to avoid "NoneType" error in native downloader
+                            if fresh_item.error:
+                                raise fresh_item.error
+                            
+                            # Override paths to use our staging directory
                             if hasattr(c_item, "final_path") and c_item.final_path:
-                                # Reparent to staging_dir preserving directory structure relative to output path
                                 original_path = Path(c_item.final_path)
                                 try:
                                     rel_path = original_path.relative_to(Path(request.output_path))
-                                    c_item.final_path = str(staging_dir / rel_path)
+                                    fresh_item.final_path = str(staging_dir / rel_path)
                                 except ValueError:
-                                    # Fallback if path not relative (unlikely)
-                                    c_item.final_path = str(staging_dir / original_path.name)
+                                    fresh_item.final_path = str(staging_dir / original_path.name)
 
-                            c_result = await c_downloader.download(c_item)
+                            c_result = await c_downloader.download(fresh_item)
+                            
+                            # Native downloads don't have fine-grained progress callbacks yet
+                            # So we manually send a "complete" progress event
+                            native_file_size = 0
+                            try:
+                                # Try to get size from final path if available, or staging dir
+                                if c_result and hasattr(c_result, "final_path") and c_result.final_path:
+                                    if os.path.exists(c_result.final_path):
+                                        native_file_size = os.path.getsize(c_result.final_path)
+                                    # If not at final path yet (because we move it later), check staging_dir
+                                    # But wait, c_result.final_path IS inside staging_dir at this point (line 3263)
+                                    # So it should be there.
+                            except Exception as e:
+                                print(f"[WARN] Could not determine native file size: {e}")
+
+                            asyncio.create_task(broadcast_ws_event("download_progress", {
+                                "track_id": track_info["track_id"],
+                                "title": track_info["title"],
+                                "artist": track_info["artist"],
+                                "stage": "download",
+                                "progress_pct": 100,
+                                "bytes": native_file_size,
+                                "total_bytes": native_file_size,
+                                "speed": 0,
+                                "eta_seconds": 0,
+                                "current": i + 1,
+                                "total": total_tracks,
+                                "codec": codec_name
+                            }))
                         
                         # Move files from staging to final destination preserving structure
-                        # Move files from staging to final destination preserving structure
+                        final_path_for_codec = None
                         if c_result and hasattr(c_result, "final_path") and c_result.final_path:
                             found_audio = False
                             for root, dirs, files in os.walk(staging_dir):
@@ -3275,7 +3345,7 @@ async def download_song(request: DownloadRequest):
                                         
                                         # Record this as the main file for this codec
                                         final_dest = Path(request.output_path) / dest_rel_path
-                                        codec_paths_map[codec_name] = str(final_dest)
+                                        final_path_for_codec = str(final_dest)
                                         found_audio = True
                                     else:
                                         # Lyrics, Cover, etc. - keep original name
@@ -3291,31 +3361,89 @@ async def download_song(request: DownloadRequest):
                                         shutil.move(str(src_path), str(final_dest))
                                         print(f"[DEBUG] Moved {file} to: {final_dest}", flush=True)
                             
-                            if found_audio:
-                                final_path_str = codec_paths_map.get(codec_name)
-                                
-                                # Set as primary if first successful one
-                                if final_path_str and not primary_file_path:
-                                    primary_file_path = final_path_str
-                                    # Update download_item to point to REAL final path for metadata extraction
-                                    download_item.final_path = final_path_str
-                        else:
-                            # If c_result is None or final_path is missing, it means download failed or file already existed and overwrite=False
-                            # In this case, we still want to populate codec_paths_map if the file exists and overwrite is false
-                            if not request.overwrite and c_result and hasattr(c_result, "final_path") and c_result.final_path:
-                                # This path is for when the file already existed and was not overwritten
-                                final_path_str = c_result.final_path
-                                codec_paths_map[codec_name] = final_path_str
-                                if not primary_file_path:
-                                    primary_file_path = final_path_str
-                                    download_item.final_path = final_path_str
-                            else:
-                                print(f"[DEBUG] Download for {codec_name} did not yield a final path.", flush=True)
-                                # No final path, so no entry in codec_paths_map for this codec
-                                
+                            if not found_audio:
+                                final_path_for_codec = None
+                        
+                        return (codec_name, final_path_for_codec, None)
+                        
                     except Exception as dl_err:
                         print(f"[ERROR] Failed to download {codec_name} for track {i+1}: {dl_err}", flush=True)
-                        # Continue to next codec
+                        return (codec_name, None, str(dl_err))
+                # HYBRID EXECUTION: 
+                # - Wrapper-path codecs run in parallel (independent HTTP calls)
+                # - Gamdl-path codecs run sequentially (share interface state)
+                # - BOTH groups start CONCURRENTLY
+                wrapper_codecs = [c for c in codec_list if is_wrapper_required(c)]
+                gamdl_codecs = [c for c in codec_list if not is_wrapper_required(c)]
+                
+                print(f"[DEBUG] Wrapper codecs (parallel): {wrapper_codecs}", flush=True)
+                print(f"[DEBUG] Gamdl codecs (sequential): {gamdl_codecs}", flush=True)
+                
+                # Helper coroutine to run gamdl codecs sequentially
+                async def run_gamdl_sequential():
+                    """Run gamdl codecs one-by-one to avoid interface state corruption"""
+                    results = []
+                    for idx, codec in enumerate(gamdl_codecs):
+                        # Add delay between gamdl downloads to let interface state settle
+                        if idx > 0:
+                            await asyncio.sleep(0.5)  # 500ms delay between gamdl codecs
+                        result = await download_single_codec(codec_list.index(codec), codec)
+                        results.append(result)
+                    return results
+                
+                # Run BOTH groups concurrently:
+                # - Wrapper codecs: each runs in parallel with others
+                # - Gamdl codecs: run sequentially, but the group starts alongside wrapper
+                wrapper_tasks = [
+                    download_single_codec(codec_list.index(codec), codec) 
+                    for codec in wrapper_codecs
+                ]
+                
+                # Create a single task for the sequential gamdl chain
+                gamdl_task = run_gamdl_sequential()
+                
+                # Run wrapper tasks and gamdl task concurrently
+                if wrapper_tasks and gamdl_codecs:
+                    # Both groups exist - run them together
+                    all_results = await asyncio.gather(*wrapper_tasks, gamdl_task, return_exceptions=True)
+                    # Last item is the gamdl results list
+                    wrapper_results = all_results[:-1]
+                    gamdl_results = all_results[-1] if not isinstance(all_results[-1], Exception) else []
+                elif wrapper_tasks:
+                    # Only wrapper codecs
+                    wrapper_results = await asyncio.gather(*wrapper_tasks, return_exceptions=True)
+                    gamdl_results = []
+                elif gamdl_codecs:
+                    # Only gamdl codecs
+                    wrapper_results = []
+                    gamdl_results = await gamdl_task
+                else:
+                    wrapper_results = []
+                    gamdl_results = []
+                
+                # Combine results
+                codec_results = list(wrapper_results) + (gamdl_results if isinstance(gamdl_results, list) else [])
+                
+                # Process results
+                for result in codec_results:
+                    if isinstance(result, Exception):
+                        print(f"[ERROR] Unexpected exception in parallel codec download: {result}", flush=True)
+                        continue
+                    
+                    codec_name, final_path, error = result
+                    
+                    if final_path:
+                        codec_paths_map[codec_name] = final_path
+                        if not primary_file_path:
+                            primary_file_path = final_path
+                            download_item.final_path = final_path
+                    
+                    # Broadcast codec completion
+                    asyncio.create_task(broadcast_ws_event("download_codec_complete", {
+                        "track_id": track_info["track_id"],
+                        "codec": codec_name,
+                        "success": final_path is not None
+                    }))
                 
                 if primary_file_path:
                     file_path = primary_file_path

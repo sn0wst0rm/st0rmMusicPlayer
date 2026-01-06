@@ -2,6 +2,7 @@
 
 import * as React from "react"
 import { useState, useEffect, useCallback } from "react"
+import { usePlayerStore, DownloadItem } from "@/lib/store"
 import { Button } from "@/components/ui/button"
 import {
     X,
@@ -17,34 +18,6 @@ import {
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 
-export interface DownloadItem {
-    id: string
-    trackId: string
-    title: string
-    artist: string
-    album: string
-    status: 'queued' | 'downloading' | 'completed' | 'skipped' | 'failed'
-    stage?: 'download' | 'decrypt' // current stage for downloading items
-    progress?: number // 0-100
-    fileSize?: number // bytes
-    totalBytes?: number // total file size
-    filePath?: string
-    reason?: string // for skipped/failed
-    startTime?: number
-    endTime?: number
-    eta?: number // estimated seconds remaining
-    speed?: number // bytes/sec for this item
-}
-
-interface QueueStats {
-    queued: number
-    completed: number
-    skipped: number
-    failed: number
-    totalBytes: number
-    currentSpeed: number // bytes per second
-    elapsedSeconds: number
-}
 
 interface DownloadQueueProps {
     open: boolean
@@ -52,166 +25,67 @@ interface DownloadQueueProps {
 }
 
 export function DownloadQueue({ open, onClose }: DownloadQueueProps) {
-    const [items, setItems] = useState<DownloadItem[]>([])
-    const [stats, setStats] = useState<QueueStats>({
-        queued: 0,
-        completed: 0,
-        skipped: 0,
-        failed: 0,
-        totalBytes: 0,
-        currentSpeed: 0,
-        elapsedSeconds: 0
-    })
+    const { downloadQueue: items, downloadStats: stats, clearCompletedDownloads } = usePlayerStore()
 
-    // Subscribe to WebSocket events for download progress
-    useEffect(() => {
-        if (!open) return
+    // No local WebSocket listener needed - handled globally in Player component
 
-        // Connect to Next.js WebSocket proxy (not directly to Python)
-        const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-        const ws = new WebSocket(`${wsProtocol}//${window.location.host}/ws`)
-
-        ws.onmessage = (event) => {
-            try {
-                const message = JSON.parse(event.data)
-                // Server sends {type: string, data: object}
-                // Flatten to {type, ...data} for handler
-                const flatEvent = {
-                    type: message.type,
-                    ...(message.data || {})
-                }
-                handleDownloadEvent(flatEvent)
-            } catch (e) {
-                console.error('Failed to parse WebSocket message:', e)
-            }
-        }
-
-        ws.onerror = (error) => {
-            console.error('WebSocket error:', error)
-        }
-
-        return () => {
-            ws.close()
-        }
-    }, [open])
-
-    const handleDownloadEvent = (event: any) => {
-        switch (event.type) {
-            case 'download_started':
-                setItems(prev => [...prev, {
-                    id: event.track_id,
-                    trackId: event.track_id,
-                    title: event.title || 'Unknown Track',
-                    artist: event.artist || 'Unknown Artist',
-                    album: event.album || 'Unknown Album',
-                    status: 'downloading',
-                    progress: 0,
-                    startTime: Date.now()
-                }])
-                setStats(prev => ({ ...prev, queued: prev.queued > 0 ? prev.queued - 1 : 0 }))
-                break
-
-            case 'download_progress':
-                setItems(prev => prev.map(item =>
-                    item.trackId === event.track_id
-                        ? {
-                            ...item,
-                            progress: event.progress_pct,
-                            fileSize: event.bytes,
-                            totalBytes: event.total_bytes,
-                            stage: event.stage, // 'download' or 'decrypt'
-                            eta: event.eta_seconds,
-                            speed: event.speed
-                        }
-                        : item
-                ))
-                setStats(prev => ({ ...prev, currentSpeed: event.speed || 0 }))
-                break
-
-            case 'download_complete':
-                setItems(prev => prev.map(item =>
-                    item.trackId === event.track_id
-                        ? {
-                            ...item,
-                            status: 'completed',
-                            progress: 100,
-                            filePath: event.file_path,
-                            fileSize: event.file_size,
-                            endTime: Date.now()
-                        }
-                        : item
-                ))
-                setStats(prev => ({
-                    ...prev,
-                    completed: prev.completed + 1,
-                    totalBytes: prev.totalBytes + (event.file_size || 0)
-                }))
-                break
-
-            case 'download_skipped':
-                setItems(prev => prev.map(item =>
-                    item.trackId === event.track_id
-                        ? { ...item, status: 'skipped', reason: event.reason || 'File already exists' }
-                        : item
-                ))
-                setStats(prev => ({ ...prev, skipped: prev.skipped + 1 }))
-                break
-
-            case 'download_failed':
-                setItems(prev => prev.map(item =>
-                    item.trackId === event.track_id
-                        ? { ...item, status: 'failed', reason: event.error }
-                        : item
-                ))
-                setStats(prev => ({ ...prev, failed: prev.failed + 1 }))
-                break
-
-            case 'queue_update':
-                setStats(prev => ({
-                    ...prev,
-                    queued: event.queued ?? prev.queued,
-                    completed: event.completed ?? prev.completed,
-                    skipped: event.skipped ?? prev.skipped,
-                    failed: event.failed ?? prev.failed
-                }))
-                break
-        }
-    }
 
     const clearHistory = () => {
-        setItems([])
-        setStats({
-            queued: 0,
-            completed: 0,
-            skipped: 0,
-            failed: 0,
-            totalBytes: 0,
-            currentSpeed: 0,
-            elapsedSeconds: 0
+        items.forEach(item => {
+            if (item.status === 'completed' || item.status === 'failed') {
+                clearCompletedDownloads()
+            }
         })
     }
 
     const formatBytes = (bytes: number) => {
-        if (bytes === 0) return '0.00 MB'
-        const mb = bytes / (1024 * 1024)
-        return `${mb.toFixed(2)} MB`
+        if (!bytes || bytes === 0) return '0 B'
+        const k = 1024
+        const sizes = ['B', 'KB', 'MB', 'GB']
+        const i = Math.floor(Math.log(bytes) / Math.log(k))
+        return `${parseFloat((bytes / Math.pow(k, i)).toFixed(2))} ${sizes[i]}`
     }
 
     const formatSpeed = (bytesPerSecond: number) => {
-        if (bytesPerSecond === 0) return '-'
-        const mbps = bytesPerSecond / (1024 * 1024)
-        return `${mbps.toFixed(2)} MB/s`
+        if (!bytesPerSecond || bytesPerSecond === 0) return '0 KB/s'
+        return `${formatBytes(bytesPerSecond)}/s`
     }
 
     const formatDuration = (seconds: number) => {
-        if (seconds === 0) return '-'
+        if (!seconds || seconds === 0) return '-'
         const mins = Math.floor(seconds / 60)
         const secs = Math.floor(seconds % 60)
         return `${mins}:${secs.toString().padStart(2, '0')}`
     }
 
-    const getStatusIcon = (status: DownloadItem['status']) => {
+    // Calculate aggregate stats from codec-level data
+    const calculateAggregates = (item: DownloadItem) => {
+        const codecTotalBytes = item.codecTotalBytes || {}
+        const codecLoadedBytes = item.codecLoadedBytes || {}
+        const codecSpeed = item.codecSpeed || {}
+
+        const totalBytes = Object.values(codecTotalBytes).reduce((a, b) => a + b, 0)
+        const loadedBytes = Object.values(codecLoadedBytes).reduce((a, b) => a + b, 0)
+        const speed = Object.values(codecSpeed).reduce((a, b) => a + b, 0)
+
+        // Calculate progress based on loaded/total bytes
+        let progress = 0
+        if (totalBytes > 0) {
+            progress = Math.min(100, Math.max(0, (loadedBytes / totalBytes) * 100))
+        }
+
+        // Calculate ETA
+        let eta = 0
+        if (speed > 0 && totalBytes > loadedBytes) {
+            eta = (totalBytes - loadedBytes) / speed
+        }
+
+        return { totalBytes, loadedBytes, speed, progress, eta }
+    }
+
+    const getStatusIcon = (status: string) => {
         switch (status) {
+            case 'pending':
             case 'queued':
                 return <Clock className="h-4 w-4 text-muted-foreground" />
             case 'downloading':
@@ -225,9 +99,10 @@ export function DownloadQueue({ open, onClose }: DownloadQueueProps) {
         }
     }
 
-    const getStatusBadge = (status: DownloadItem['status']) => {
-        const styles = {
+    const getStatusBadge = (status: string) => {
+        const styles: Record<string, string> = {
             queued: 'bg-muted text-muted-foreground',
+            pending: 'bg-muted text-muted-foreground',
             downloading: 'bg-blue-500/10 text-blue-600',
             completed: 'bg-green-500/10 text-green-600',
             skipped: 'bg-amber-500/10 text-amber-600',
@@ -235,8 +110,8 @@ export function DownloadQueue({ open, onClose }: DownloadQueueProps) {
         }
         return (
             <span className={cn(
-                "px-2 py-0.5 rounded text-xs font-medium",
-                styles[status]
+                "px-2 py-0.5 rounded text-xs font-medium capitalize",
+                styles[status] || styles.pending
             )}>
                 {status}
             </span>
@@ -255,11 +130,11 @@ export function DownloadQueue({ open, onClose }: DownloadQueueProps) {
                         <Button
                             variant="ghost"
                             size="sm"
-                            onClick={clearHistory}
+                            onClick={() => clearCompletedDownloads()}
                             className="text-muted-foreground hover:text-foreground"
                         >
                             <Trash2 className="h-4 w-4 mr-2" />
-                            Clear History
+                            Clear Completed
                         </Button>
                         <Button variant="ghost" size="icon" onClick={onClose}>
                             <X className="h-4 w-4" />
@@ -273,22 +148,23 @@ export function DownloadQueue({ open, onClose }: DownloadQueueProps) {
                         <div className="flex items-center gap-1.5">
                             <Clock className="h-3.5 w-3.5 text-muted-foreground" />
                             <span className="text-muted-foreground">Queued:</span>
-                            <span className="font-medium">{stats.queued}</span>
+                            <span className="text-muted-foreground">Active:</span>
+                            <span className="font-medium">{stats.activeDownloads}</span>
                         </div>
                         <div className="flex items-center gap-1.5">
                             <CheckCircle2 className="h-3.5 w-3.5 text-green-500" />
                             <span className="text-muted-foreground">Completed:</span>
-                            <span className="font-medium">{stats.completed}</span>
+                            <span className="font-medium">{stats.completedDownloads}</span>
                         </div>
                         <div className="flex items-center gap-1.5">
                             <FileText className="h-3.5 w-3.5 text-amber-500" />
                             <span className="text-muted-foreground">Skipped:</span>
-                            <span className="font-medium">{stats.skipped}</span>
+                            <span className="font-medium">0</span>
                         </div>
                         <div className="flex items-center gap-1.5">
                             <XCircle className="h-3.5 w-3.5 text-red-500" />
                             <span className="text-muted-foreground">Failed:</span>
-                            <span className="font-medium">{stats.failed}</span>
+                            <span className="font-medium">{stats.failedDownloads}</span>
                         </div>
                     </div>
                 </div>
@@ -298,17 +174,14 @@ export function DownloadQueue({ open, onClose }: DownloadQueueProps) {
                     <div className="flex items-center gap-2">
                         <HardDrive className="h-4 w-4" />
                         <span>Downloaded:</span>
-                        <span className="font-medium text-foreground">{formatBytes(stats.totalBytes)}</span>
+                        <span className="font-medium text-foreground">{stats.completedDownloads} items</span>
                     </div>
                     <div className="flex items-center gap-2">
                         <Gauge className="h-4 w-4" />
                         <span>Speed:</span>
-                        <span className="font-medium text-foreground">{formatSpeed(stats.currentSpeed)}</span>
-                    </div>
-                    <div className="flex items-center gap-2">
-                        <Timer className="h-4 w-4" />
-                        <span>Duration:</span>
-                        <span className="font-medium text-foreground">{formatDuration(stats.elapsedSeconds)}</span>
+                        <span className="font-medium text-foreground">
+                            {stats.activeDownloads > 0 ? formatSpeed(stats.currentSpeed || 0) : '0 KB/s'}
+                        </span>
                     </div>
                 </div>
 
@@ -321,9 +194,9 @@ export function DownloadQueue({ open, onClose }: DownloadQueueProps) {
                             <p className="text-sm">Start a download from the Import page</p>
                         </div>
                     ) : (
-                        items.map((item) => (
+                        items.map((item, index) => (
                             <div
-                                key={item.id}
+                                key={`${item.id}-${index}`}
                                 className="p-4 rounded-lg border bg-card"
                             >
                                 <div className="flex items-start justify-between">
@@ -341,10 +214,51 @@ export function DownloadQueue({ open, onClose }: DownloadQueueProps) {
                                                     {item.reason}
                                                 </p>
                                             )}
-                                            {item.fileSize && item.status === 'completed' && (
+                                            {item.status === 'completed' && (
                                                 <p className="text-sm text-muted-foreground">
-                                                    {formatBytes(item.fileSize)}
+                                                    {formatBytes(calculateAggregates(item).totalBytes || item.fileSize || 0)}
                                                 </p>
+                                            )}
+                                            {/* Codec badges for completed downloads */}
+                                            {item.status === 'completed' && item.downloadedCodecs && item.downloadedCodecs.length > 0 && (
+                                                <div className="flex flex-wrap gap-1.5 mt-1">
+                                                    {item.downloadedCodecs.map((codec) => {
+                                                        // Color coding for codecs
+                                                        let colorClass = "bg-primary/20 text-primary border-primary/30" // Standard
+                                                        if (['alac', 'flac'].includes(codec) || codec.includes('lossless')) {
+                                                            colorClass = "bg-purple-500/20 text-purple-600 dark:text-purple-400 border-purple-500/30" // Hi-Res
+                                                        } else if (['atmos', 'ac3', 'aac-binaural', 'aac-he-binaural'].includes(codec) || codec.includes('spatial')) {
+                                                            colorClass = "bg-sky-500/20 text-sky-600 dark:text-sky-400 border-sky-500/30" // Spatial
+                                                        }
+
+                                                        const codecLabels: Record<string, string> = {
+                                                            'aac-legacy': 'AAC',
+                                                            'aac-he-legacy': 'AAC-HE',
+                                                            'aac': 'AAC 48kHz',
+                                                            'aac-he': 'AAC-HE 48kHz',
+                                                            'alac': 'Lossless',
+                                                            'atmos': 'Dolby Atmos',
+                                                            'aac-binaural': 'Spatial',
+                                                            'aac-he-binaural': 'Spatial HE',
+                                                            'aac-downmix': 'Downmix',
+                                                            'aac-he-downmix': 'HE Downmix',
+                                                            'ac3': 'AC3',
+                                                        }
+                                                        const label = codecLabels[codec] || codec.toUpperCase()
+
+                                                        return (
+                                                            <span
+                                                                key={codec}
+                                                                className={cn(
+                                                                    "px-1.5 py-0.5 rounded text-[10px] font-medium border",
+                                                                    colorClass
+                                                                )}
+                                                            >
+                                                                {label}
+                                                            </span>
+                                                        )
+                                                    })}
+                                                </div>
                                             )}
                                             {item.filePath && (
                                                 <p className="text-xs text-muted-foreground font-mono truncate max-w-md">
@@ -357,30 +271,81 @@ export function DownloadQueue({ open, onClose }: DownloadQueueProps) {
                                 </div>
 
                                 {/* Progress bar for downloading items */}
-                                {item.status === 'downloading' && item.progress !== undefined && (
-                                    <div className="mt-3 space-y-1.5">
-                                        <div className="h-1.5 bg-muted rounded-full overflow-hidden">
-                                            <div
-                                                className="h-full bg-blue-500 transition-all duration-300"
-                                                style={{ width: `${item.progress}%` }}
-                                            />
-                                        </div>
-                                        {/* Stage and speed info */}
-                                        <div className="flex items-center justify-between text-xs text-muted-foreground">
-                                            <span className="capitalize">
-                                                {item.stage === 'decrypt' ? 'Decrypting...' : 'Downloading...'}
-                                            </span>
-                                            <div className="flex items-center gap-3">
-                                                {item.speed && item.speed > 0 && (
-                                                    <span>{formatSpeed(item.speed)}</span>
-                                                )}
-                                                {item.eta && item.eta > 0 && (
-                                                    <span>~{formatDuration(item.eta)}</span>
-                                                )}
+                                {item.status === 'downloading' && (() => {
+                                    // Calculate aggregates from merged codec data
+                                    const { totalBytes, loadedBytes, speed, progress, eta } = calculateAggregates(item)
+
+                                    return (
+                                        <div className="mt-3 space-y-2">
+                                            <div className="flex items-center justify-between text-xs text-muted-foreground">
+                                                <div className="flex items-center gap-2">
+                                                    <span>
+                                                        {loadedBytes > 0 && totalBytes > 0
+                                                            ? `${formatBytes(loadedBytes)} / ${formatBytes(totalBytes)}`
+                                                            : `Downloading ${Object.keys(item.codecStatus || {}).length} codecs...`}
+                                                    </span>
+                                                    {speed > 0 && (
+                                                        <span className="text-muted-foreground/70 border-l pl-2 border-border/50">
+                                                            {formatSpeed(speed)}
+                                                        </span>
+                                                    )}
+                                                    {eta > 0 && (
+                                                        <span className="text-muted-foreground/70 border-l pl-2 border-border/50">
+                                                            {formatDuration(eta)} remaining
+                                                        </span>
+                                                    )}
+                                                </div>
+                                                <span>{Math.round(progress)}%</span>
                                             </div>
+                                            <div className="h-2 bg-muted rounded-full overflow-hidden">
+                                                <div
+                                                    className="h-full bg-primary transition-all duration-300"
+                                                    style={{ width: `${progress}%` }}
+                                                />
+                                            </div>
+
+                                            {/* Individual Codec Progress Bars */}
+                                            {item.codecStatus && Object.keys(item.codecStatus).length > 0 && (
+                                                <div className="flex flex-col gap-1.5 mt-2 pt-2 border-t border-border/50">
+                                                    {Object.entries(item.codecStatus).map(([codec, status]) => {
+                                                        const progress = item.codecProgress?.[codec] || 0
+                                                        const isPending = status === 'pending'
+                                                        const isDecrypting = status === 'decrypting'
+
+                                                        // Color coding for codecs
+                                                        let colorClass = "bg-blue-500" // Standard/Default
+                                                        if (isPending) {
+                                                            colorClass = "bg-muted/50" // Pending/Gray
+                                                        } else if (isDecrypting) {
+                                                            colorClass = "bg-amber-500 animate-pulse" // Decrypting/Amber
+                                                        } else if (['alac', 'flac'].includes(codec) || codec.includes('lossless')) {
+                                                            colorClass = "bg-purple-500" // Hi-Res
+                                                        } else if (['atmos', 'ac3', 'aac-binaural'].includes(codec) || codec.includes('spatial')) {
+                                                            colorClass = "bg-sky-400" // Spatial
+                                                        }
+
+                                                        return (
+                                                            <div key={codec} className="flex items-center gap-2 text-[10px]">
+                                                                <span className={cn("w-12 font-medium uppercase truncate", isPending ? "text-muted-foreground/50" : "text-muted-foreground")} title={codec}>
+                                                                    {codec.replace('aac-', '')}
+                                                                </span>
+                                                                <div className="flex-1 h-1.5 bg-muted rounded-full overflow-hidden">
+                                                                    <div
+                                                                        className={cn("h-full transition-all duration-300", colorClass)}
+                                                                        style={{ width: `${status === 'completed' ? 100 : progress}%` }}
+                                                                    />
+                                                                </div>
+                                                                <span className={cn("w-10 text-right", isPending || isDecrypting ? "text-muted-foreground/50" : "text-muted-foreground")}>
+                                                                    {status === 'completed' ? 'Done' : (isDecrypting ? 'Decrypt' : (isPending ? 'Wait' : `${Math.round(progress)}%`))}
+                                                                </span>
+                                                            </div>
+                                                        )
+                                                    })}
+                                                </div>
+                                            )}
                                         </div>
-                                    </div>
-                                )}
+                                    )
+                                })()}
                             </div>
                         ))
                     )}
