@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from "next";
 import "./globals.css";
 import { AppSidebar } from "@/components/app-sidebar";
 import { Player } from "@/components/player";
+import { DownloadManager } from "@/components/DownloadManager";
 import { SidebarProvider, SidebarInset, SidebarTrigger } from "@/components/ui/sidebar";
 import { Separator } from "@/components/ui/separator";
 import { ThemeProvider } from "@/components/theme-provider";
@@ -60,6 +61,7 @@ export default function RootLayout({
             <QueueSidebar />
           </SidebarProvider>
           <Player />
+          <DownloadManager />
           <Toaster />
         </ThemeProvider>
       </body>

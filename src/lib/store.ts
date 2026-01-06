@@ -55,6 +55,46 @@ export interface SelectedAlbum {
     recordLabel?: string
 }
 
+export interface DownloadItem {
+    id: string  // Now: "{trackId}-{timestamp}" for unique entries
+    trackId: string  // The actual Apple Music track ID
+    title: string
+    artist: string
+    album: string
+    artworkUrl?: string
+    status: 'pending' | 'downloading' | 'completed' | 'failed'
+    reason?: string // Failure reason
+    fileSize?: number // Total size in bytes (sum of all codecs)
+    filePath?: string // Path to downloaded file
+    progress: number // Overall progress (0-100)
+    totalTracks: number
+    completedTracks: number
+    addedAt: number
+
+    // Per-codec progress tracking
+    codecStatus: Record<string, 'pending' | 'downloading' | 'decrypting' | 'completed' | 'failed'>
+    codecProgress: Record<string, number> // 0-100 per codec
+    codecSpeed?: Record<string, number> // bytes/sec per codec
+    downloadedCodecs?: string[]  // Codecs successfully downloaded in this session
+
+    // Detailed stats
+    speed?: number // bytes/sec
+    eta?: number // seconds
+    totalBytes?: number // sum of known total bytes
+    loadedBytes?: number // sum of loaded bytes
+    codecTotalBytes?: Record<string, number>
+    codecLoadedBytes?: Record<string, number>
+}
+
+export interface QueueStats {
+    totalDownloads: number
+    activeDownloads: number
+    completedDownloads: number
+    failedDownloads: number
+    currentSpeed: number
+    totalQueueSize: number
+}
+
 export interface NavigationState {
     view: 'artists' | 'albums' | 'songs' | 'search' | 'playlist' | 'import'
     scrollTop?: number
@@ -90,7 +130,12 @@ interface PlayerState {
     // Codec switching state
     currentCodec: string | null  // Currently playing codec
     availableCodecs: string[]    // Available codecs for current track
+
     codecPriority: string[]      // User-defined codec priority order (highest first)
+
+    // Download Queue Global State
+    downloadQueue: DownloadItem[]
+    downloadStats: QueueStats
 
     // Actions
     setIsPlaying: (isPlaying: boolean) => void
@@ -127,6 +172,13 @@ interface PlayerState {
     setAvailableCodecs: (codecs: string[]) => void
     setCodecPriority: (priority: string[]) => void
     fetchCodecsForTrack: (trackId: string) => Promise<void>
+
+    // Download Queue Actions
+    addDownloadItem: (item: DownloadItem) => void
+    updateDownloadItem: (id: string, updates: Partial<DownloadItem>) => void
+    removeDownloadItem: (id: string) => void
+    clearCompletedDownloads: () => void
+    updateDownloadStats: (stats: Partial<QueueStats>) => void
 }
 
 // Helper to add track to playback history
@@ -169,7 +221,19 @@ export const usePlayerStore = create<PlayerState>()(
             currentCodec: null,
             availableCodecs: [],
             // Default codec priority: prefer lossless > spatial > standard
-            codecPriority: ['alac', 'atmos', 'aac-binaural', 'aac', 'aac-he', 'aac-legacy', 'aac-he-legacy', 'ac3', 'aac-downmix'],
+            // Default codec priority: prefer lossless > spatial > standard
+            codecPriority: ['alac', 'atmos', 'aac-binaural', 'aac-he-binaural', 'aac', 'aac-he', 'aac-legacy', 'aac-he-legacy', 'ac3', 'aac-downmix', 'aac-he-downmix'],
+
+            // Download Queue Initial State
+            downloadQueue: [],
+            downloadStats: {
+                totalDownloads: 0,
+                activeDownloads: 0,
+                completedDownloads: 0,
+                failedDownloads: 0,
+                currentSpeed: 0,
+                totalQueueSize: 0
+            },
 
             setIsPlaying: (isPlaying) => set({ isPlaying }),
             setVolume: (volume) => set({ volume }),
@@ -392,7 +456,86 @@ export const usePlayerStore = create<PlayerState>()(
                 } catch (error) {
                     console.error('Failed to fetch codecs:', error)
                 }
-            }
+            },
+
+            // Download Queue Implementations
+            addDownloadItem: (item) => set((state) => {
+                // Always add new items (unique ID expected from caller)
+                return {
+                    downloadQueue: [item, ...state.downloadQueue],
+                    downloadStats: {
+                        ...state.downloadStats,
+                        totalDownloads: state.downloadStats.totalDownloads + 1,
+                        activeDownloads: state.downloadStats.activeDownloads + 1
+                    }
+                }
+            }),
+
+            updateDownloadItem: (id, updates) => set((state) => {
+                const newQueue = state.downloadQueue.map(item => {
+                    if (item.id !== id) return item
+
+                    // Deep merge codec-related objects to prevent race conditions
+                    // when multiple parallel downloads update different codecs
+                    const mergedUpdates = { ...updates }
+
+                    // Merge codecStatus
+                    if (updates.codecStatus) {
+                        mergedUpdates.codecStatus = { ...item.codecStatus, ...updates.codecStatus }
+                    }
+                    // Merge codecProgress
+                    if (updates.codecProgress) {
+                        mergedUpdates.codecProgress = { ...item.codecProgress, ...updates.codecProgress }
+                    }
+                    // Merge codecTotalBytes
+                    if (updates.codecTotalBytes) {
+                        mergedUpdates.codecTotalBytes = { ...item.codecTotalBytes, ...updates.codecTotalBytes }
+                    }
+                    // Merge codecLoadedBytes
+                    if (updates.codecLoadedBytes) {
+                        mergedUpdates.codecLoadedBytes = { ...item.codecLoadedBytes, ...updates.codecLoadedBytes }
+                    }
+                    // Merge codecSpeed
+                    if (updates.codecSpeed) {
+                        mergedUpdates.codecSpeed = { ...item.codecSpeed, ...updates.codecSpeed }
+                    }
+
+                    return { ...item, ...mergedUpdates }
+                })
+
+                // Recalculate stats if status changed
+                const activeCount = newQueue.filter(i => i.status === 'downloading' || i.status === 'pending').length
+                const completedCount = newQueue.filter(i => i.status === 'completed').length
+                const failedCount = newQueue.filter(i => i.status === 'failed').length
+
+                return {
+                    downloadQueue: newQueue,
+                    downloadStats: {
+                        totalDownloads: newQueue.length,
+                        activeDownloads: activeCount,
+                        completedDownloads: completedCount,
+                        failedDownloads: failedCount,
+                        currentSpeed: state.downloadStats.currentSpeed, // Maintain current speed
+                        totalQueueSize: state.downloadStats.totalQueueSize // Maintain current size
+                    }
+                }
+            }),
+
+            removeDownloadItem: (id) => set((state) => ({
+                downloadQueue: state.downloadQueue.filter(item => item.id !== id)
+            })),
+
+            clearCompletedDownloads: () => set((state) => ({
+                downloadQueue: state.downloadQueue.filter(item => item.status !== 'completed'),
+                downloadStats: {
+                    ...state.downloadStats,
+                    completedDownloads: 0
+                }
+            })),
+
+            updateDownloadStats: (stats) => set((state) => ({
+                downloadStats: { ...state.downloadStats, ...stats }
+            }))
         }),
         {
             name: 'storm-music-player',
@@ -408,6 +551,8 @@ export const usePlayerStore = create<PlayerState>()(
                 repeatMode: state.repeatMode,
                 volume: state.volume,
                 playbackProgress: state.playbackProgress,
+                // Codec state for reload
+                currentCodec: state.currentCodec,
                 // Navigation state for URL restoration
                 currentView: state.currentView,
                 selectedAlbum: state.selectedAlbum,
@@ -415,6 +560,9 @@ export const usePlayerStore = create<PlayerState>()(
                 searchQuery: state.searchQuery,
                 // Codec priority (user preference)
                 codecPriority: state.codecPriority,
+                // Persist Download Queue
+                downloadQueue: state.downloadQueue,
+                downloadStats: state.downloadStats,
             }),
         }
     )

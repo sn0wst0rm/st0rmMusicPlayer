@@ -7,10 +7,10 @@ import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
 import { DynamicGradientBackground } from "@/components/ui/dynamic-gradient-background"
 import { extractColorsFromImage, getAppleMusicFallbackColors } from "@/lib/color-extraction"
-import { Play, Pause, SkipBack, SkipForward, Volume2, Shuffle, ListVideo, Repeat, Repeat1, Mic2, Headphones } from "lucide-react"
+import { Play, Pause, SkipBack, SkipForward, Volume2, Shuffle, ListVideo, Repeat, Repeat1, Mic2 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { CodecSelector } from "@/components/codec-selector"
-import { getSpatialAudioRenderer, isSpatialCodec, detectSpatialAudioSupport } from "@/lib/spatial-audio"
+import { isCodecSupportedInBrowser } from "@/lib/browser-codec-support"
 
 export function Player() {
     const {
@@ -38,7 +38,7 @@ export function Player() {
         availableCodecs,
         setCurrentCodec,
         fetchCodecsForTrack,
-        queue
+        queue,
     } = usePlayerStore()
 
     const audioRef = React.useRef<HTMLAudioElement>(null)
@@ -54,14 +54,14 @@ export function Player() {
     const [validatedState, setValidatedState] = React.useState<{ trackId: string; codec: string } | null>(null)
     const preloadAudioRef = React.useRef<HTMLAudioElement | null>(null)
 
-    // Spatial audio state
-    const [spatialEnabled, setSpatialEnabled] = React.useState(false)
-    const [headTrackingEnabled, setHeadTrackingEnabled] = React.useState(false)
-    const [spatialSupported, setSpatialSupported] = React.useState(false)
-    const spatialRendererRef = React.useRef<ReturnType<typeof getSpatialAudioRenderer> | null>(null)
+
 
     // Ref to track first render - skip track reset on initial mount for position restoration
     const isFirstRenderRef = React.useRef(true)
+
+    // Download WebSocket handling has been moved to DownloadManager.tsx for better separation of concerns
+
+
 
     React.useEffect(() => {
         // Skip on initial mount to allow position restoration on page reload
@@ -109,6 +109,7 @@ export function Player() {
     }, [currentTrack?.id, fetchCodecsForTrack])
 
     // Validate and auto-select best playable codec when track changes or availableCodecs load
+    // Uses browser compatibility table - no per-track testing needed
     React.useEffect(() => {
         if (!currentTrack || availableCodecs.length === 0) return
 
@@ -118,78 +119,36 @@ export function Player() {
             return // Already validated
         }
 
-        const validateAndSelectBestCodec = async () => {
-            // CHECK PRE-CACHE FIRST - if we already validated this track's codec, use it
-            const cachedCodec = nextTrackCacheRef.current.get(currentTrack.id)
-            if (cachedCodec && availableCodecs.includes(cachedCodec)) {
-                // Remove from cache so the NEW next track can be cached
-                nextTrackCacheRef.current.delete(currentTrack.id)
+        // Get codec priority from store
+        const { codecPriority } = usePlayerStore.getState()
 
-                // Set validated state BEFORE changing codec to prevent re-validation
-                setValidatedState({ trackId: currentTrack.id, codec: cachedCodec })
+        // Find the best codec: must be available for track AND supported by browser
+        let bestCodec: string | null = null
 
-                if (cachedCodec !== currentCodec) {
-                    // Switch to the cached codec
-                    setCurrentCodec(cachedCodec)
-                }
-                return
+        // First try codecs in priority order
+        for (const codec of codecPriority) {
+            if (availableCodecs.includes(codec) && isCodecSupportedInBrowser(codec)) {
+                bestCodec = codec
+                break
             }
+        }
 
-            // Get codec priority from store
-            const { codecPriority } = usePlayerStore.getState()
-
-            // Determine which codec to test - use currentCodec or select from priority
-            let codecToTest = currentCodec
-            if (!codecToTest || !availableCodecs.includes(codecToTest)) {
-                for (const codec of codecPriority) {
-                    if (availableCodecs.includes(codec)) {
-                        codecToTest = codec
-                        break
-                    }
-                }
-                if (!codecToTest) {
-                    codecToTest = availableCodecs[0]
-                }
-            }
-
-            // Test if codec is playable
-            const isCurrentPlayable = await testCodecPlayability(currentTrack.id, codecToTest)
-
-            if (isCurrentPlayable) {
-                setValidatedState({ trackId: currentTrack.id, codec: codecToTest })
-                if (codecToTest !== currentCodec) {
-                    setCurrentCodec(codecToTest)
-                }
-                return
-            }
-
-
-
-            // Find first playable codec from priority list
-            for (const codec of codecPriority) {
-                if (!availableCodecs.includes(codec)) continue
-                if (codec === codecToTest) continue // Skip the one we just tested
-
-                const isPlayable = await testCodecPlayability(currentTrack.id, codec)
-                if (isPlayable) {
-                    setValidatedState({ trackId: currentTrack.id, codec })
-                    setCurrentCodec(codec)
-                    return
-                }
-            }
-
-            // If no priority codec works, try all available
+        // Fallback to any available codec that browser supports
+        if (!bestCodec) {
             for (const codec of availableCodecs) {
-                if (codec === codecToTest) continue
-
-                const isPlayable = await testCodecPlayability(currentTrack.id, codec)
-                if (isPlayable) {
-                    setValidatedState({ trackId: currentTrack.id, codec })
-                    setCurrentCodec(codec)
-                    return
+                if (isCodecSupportedInBrowser(codec)) {
+                    bestCodec = codec
+                    break
                 }
             }
+        }
 
+        if (bestCodec) {
+            setValidatedState({ trackId: currentTrack.id, codec: bestCodec })
+            if (bestCodec !== currentCodec) {
+                setCurrentCodec(bestCodec)
+            }
+        } else {
             // No playable codec found - show error
             import('sonner').then(({ toast }) => {
                 toast.error('No compatible audio codec available', {
@@ -197,123 +156,8 @@ export function Player() {
                 })
             })
         }
-
-        validateAndSelectBestCodec()
     }, [currentTrack?.id, currentCodec, availableCodecs, setCurrentCodec, validatedState])
 
-    // Pre-cache: Store validated codec for next track to speed up skipping
-    const nextTrackCacheRef = React.useRef<Map<string, string>>(new Map())
-
-    // Pre-validate next track in queue for faster skipping
-    React.useEffect(() => {
-        // Only pre-cache when current track is validated
-        const isValid = validatedState?.trackId === currentTrack?.id &&
-            validatedState?.codec === currentCodec
-        if (!isValid || queue.length === 0) return
-
-        const nextTrackInQueue = queue[0]?.track
-        if (!nextTrackInQueue) return
-
-        // Skip if already cached
-        if (nextTrackCacheRef.current.has(nextTrackInQueue.id)) return
-
-        const preValidateNextTrack = async () => {
-            try {
-                // Fetch codecs for next track
-                const res = await fetch(`/api/track/${nextTrackInQueue.id}/codecs`)
-                if (!res.ok) return
-
-                const data = await res.json()
-                const available: string[] = data.available || []
-                if (available.length === 0) return
-
-                // Get priority list
-                const { codecPriority } = usePlayerStore.getState()
-
-                // Find first playable codec for next track
-                for (const codec of codecPriority) {
-                    if (!available.includes(codec)) continue
-
-                    const isPlayable = await testCodecPlayability(nextTrackInQueue.id, codec)
-                    if (isPlayable) {
-                        nextTrackCacheRef.current.set(nextTrackInQueue.id, codec)
-                        return
-                    }
-                }
-
-                // Fallback to any available
-                for (const codec of available) {
-                    const isPlayable = await testCodecPlayability(nextTrackInQueue.id, codec)
-                    if (isPlayable) {
-                        nextTrackCacheRef.current.set(nextTrackInQueue.id, codec)
-                        return
-                    }
-                }
-            } catch (e) {
-                console.error('Pre-cache failed for next track:', e)
-            }
-        }
-
-        preValidateNextTrack()
-    }, [queue, validatedState, currentTrack?.id, currentCodec])
-
-    // Clear pre-cache when queue changes significantly
-    React.useEffect(() => {
-        // Keep only entries that are still in queue
-        const queueIds = new Set(queue.map((q: { track: { id: string } }) => q.track.id))
-        nextTrackCacheRef.current.forEach((_, key) => {
-            if (!queueIds.has(key)) {
-                nextTrackCacheRef.current.delete(key)
-            }
-        })
-    }, [queue])
-    React.useEffect(() => {
-        const support = detectSpatialAudioSupport()
-        setSpatialSupported(support.webAudioSupported && support.pannerSupported)
-    }, [])
-
-    // Initialize/cleanup spatial audio based on codec
-    React.useEffect(() => {
-        const isSpatial = isSpatialCodec(currentCodec)
-
-        if (isSpatial && audioRef.current && !spatialRendererRef.current) {
-            // Initialize spatial audio for spatial codecs
-            const renderer = getSpatialAudioRenderer()
-            renderer.initialize(audioRef.current).then(success => {
-                if (success) {
-                    spatialRendererRef.current = renderer
-                    setSpatialEnabled(true)
-                }
-            })
-        } else if (!isSpatial && spatialRendererRef.current) {
-            // Cleanup spatial audio when switching away from spatial codec
-            spatialRendererRef.current.destroy()
-            spatialRendererRef.current = null
-            setSpatialEnabled(false)
-            setHeadTrackingEnabled(false)
-        }
-
-        return () => {
-            // Cleanup on unmount
-            if (spatialRendererRef.current) {
-                spatialRendererRef.current.destroy()
-                spatialRendererRef.current = null
-            }
-        }
-    }, [currentCodec])
-
-    // Toggle head tracking
-    const toggleHeadTracking = async () => {
-        if (!spatialRendererRef.current) return
-
-        if (headTrackingEnabled) {
-            spatialRendererRef.current.disableHeadTracking()
-            setHeadTrackingEnabled(false)
-        } else {
-            const success = await spatialRendererRef.current.enableHeadTracking()
-            setHeadTrackingEnabled(success)
-        }
-    }
 
     // Only control play/pause when codec is validated
     React.useEffect(() => {
@@ -343,14 +187,16 @@ export function Player() {
 
     React.useEffect(() => {
         if ("mediaSession" in navigator && currentTrack) {
+            // Use absolute URLs for artwork - required for iOS
+            const baseUrl = typeof window !== 'undefined' ? window.location.origin : ''
             navigator.mediaSession.metadata = new MediaMetadata({
                 title: currentTrack.title,
                 artist: currentTrack.artist?.name || "Unknown Artist",
                 album: currentTrack.album?.title || "Unknown Album",
                 artwork: [
-                    { src: `/api/cover/${currentTrack.id}?size=small`, sizes: "96x96", type: "image/jpeg" },
-                    { src: `/api/cover/${currentTrack.id}?size=medium`, sizes: "256x256", type: "image/jpeg" },
-                    { src: `/api/cover/${currentTrack.id}?size=large`, sizes: "512x512", type: "image/jpeg" },
+                    { src: `${baseUrl}/api/cover/${currentTrack.id}?size=small`, sizes: "96x96", type: "image/jpeg" },
+                    { src: `${baseUrl}/api/cover/${currentTrack.id}?size=medium`, sizes: "256x256", type: "image/jpeg" },
+                    { src: `${baseUrl}/api/cover/${currentTrack.id}?size=large`, sizes: "512x512", type: "image/jpeg" },
                 ]
             })
         }
@@ -360,6 +206,21 @@ export function Player() {
         if ("mediaSession" in navigator) {
             navigator.mediaSession.setActionHandler("play", () => setIsPlaying(true))
             navigator.mediaSession.setActionHandler("pause", () => setIsPlaying(false))
+
+            // Match handlePrev logic: rewind if >3s into track, else go to previous
+            navigator.mediaSession.setActionHandler("previoustrack", () => {
+                if (audioRef.current && (audioRef.current.currentTime > 3 || sessionHistory.length === 0)) {
+                    audioRef.current.currentTime = 0
+                    setPlaybackProgress(0) // Reset saved progress
+                } else {
+                    setPlaybackProgress(0) // Reset so previous track starts from beginning
+                    prevTrack()
+                }
+            })
+
+            navigator.mediaSession.setActionHandler("nexttrack", () => nextTrack())
+
+            // Seekbackward/seekforward needed for seek bar to work on iOS (shows -10/+10 buttons)
             navigator.mediaSession.setActionHandler("seekbackward", (details) => {
                 if (audioRef.current) {
                     audioRef.current.currentTime = Math.max(0, audioRef.current.currentTime - (details.seekOffset || 10))
@@ -367,12 +228,31 @@ export function Player() {
             })
             navigator.mediaSession.setActionHandler("seekforward", (details) => {
                 if (audioRef.current) {
-                    audioRef.current.currentTime = Math.min(audioRef.current.duration, audioRef.current.currentTime + (details.seekOffset || 10))
+                    audioRef.current.currentTime = Math.min(audioRef.current.duration || 0, audioRef.current.currentTime + (details.seekOffset || 10))
                 }
             })
-            // Removed prev/next handlers to restore system seeker controls as requested
+
+            // Seek bar works via seekto handler
+            navigator.mediaSession.setActionHandler("seekto", (details) => {
+                if (audioRef.current && details.seekTime !== undefined && isFinite(details.seekTime)) {
+                    audioRef.current.currentTime = details.seekTime
+                    // Update position state immediately for responsive seek bar
+                    if (navigator.mediaSession.setPositionState && isFinite(audioRef.current.duration)) {
+                        try {
+                            navigator.mediaSession.setPositionState({
+                                duration: audioRef.current.duration,
+                                playbackRate: audioRef.current.playbackRate || 1,
+                                position: details.seekTime
+                            })
+                        } catch (e) { /* ignore */ }
+                    }
+                }
+            })
         }
-    }, [setIsPlaying, prevTrack, nextTrack])
+    }, [setIsPlaying, prevTrack, nextTrack, sessionHistory.length, setPlaybackProgress])
+
+    // Ref for throttling position state updates
+    const lastPositionUpdateRef = React.useRef<number>(0)
 
     const handleTimeUpdate = () => {
         if (audioRef.current) {
@@ -385,6 +265,21 @@ export function Player() {
             }
             if (isFinite(audioDuration) && audioDuration > 0) {
                 setDuration(audioDuration)
+
+                // Update system media controls seek bar position (throttled to 1x per second)
+                const now = Date.now()
+                if ("mediaSession" in navigator && navigator.mediaSession.setPositionState && now - lastPositionUpdateRef.current > 1000) {
+                    lastPositionUpdateRef.current = now
+                    try {
+                        navigator.mediaSession.setPositionState({
+                            duration: audioDuration,
+                            playbackRate: audioRef.current.playbackRate || 1,
+                            position: currentTime
+                        })
+                    } catch (e) {
+                        // Ignore errors from invalid position state
+                    }
+                }
             }
 
             // Save progress to store every 5 seconds (throttled)
@@ -486,43 +381,6 @@ export function Player() {
         }
     }
 
-    // Pre-flight test: Check if codec is playable in this browser
-    // Uses a temporary Audio element to test WITHOUT switching the main player
-    const testCodecPlayability = async (trackId: string, codec: string): Promise<boolean> => {
-        return new Promise((resolve) => {
-            const testAudio = new Audio()
-            const testUrl = `/api/stream/${trackId}?codec=${codec}`
-
-            const timeout = setTimeout(() => {
-                testAudio.src = ''
-                resolve(false) // Timeout = not playable
-            }, 3000)
-
-            const handleCanPlay = () => {
-                clearTimeout(timeout)
-                cleanup()
-                resolve(true)
-            }
-
-            const handleError = () => {
-                clearTimeout(timeout)
-                cleanup()
-                resolve(false)
-            }
-
-            const cleanup = () => {
-                testAudio.removeEventListener('canplay', handleCanPlay)
-                testAudio.removeEventListener('error', handleError)
-                testAudio.src = ''
-            }
-
-            testAudio.addEventListener('canplay', handleCanPlay)
-            testAudio.addEventListener('error', handleError)
-            testAudio.preload = 'metadata'
-            testAudio.src = testUrl
-        })
-    }
-
     // Codec switching - updates audio source directly
     // This is for switching codec on the SAME track (preserves position)
     const handleCodecChange = async (newCodec: string) => {
@@ -532,73 +390,89 @@ export function Player() {
         setIsCodecSwitching(true)
 
         // Capture current state BEFORE any changes
-        const savedTime = audioRef.current.currentTime
-        const savedDuration = audioRef.current.duration
         const wasPlaying = isPlaying
         const savedVolume = audioRef.current.volume
         const previousCodec = currentCodec
 
         try {
-            // PRE-FLIGHT TEST: Check if new codec is playable before switching
-            const isPlayable = await testCodecPlayability(currentTrack.id, newCodec)
+            // PRELOAD: Create hidden audio element to load new codec
+            const preloadAudio = new Audio()
+            preloadAudio.preload = 'auto'
+            preloadAudio.volume = savedVolume
+            preloadAudio.src = `/api/stream/${currentTrack.id}?codec=${newCodec}`
 
-            if (!isPlayable) {
+            // Wait for preload audio to be ready enough to play
+            const preloadResult = await new Promise<'ready' | 'error' | 'timeout'>((resolve) => {
+                const timeout = setTimeout(() => resolve('timeout'), 10000)
+
+                const handleReady = () => {
+                    clearTimeout(timeout)
+                    cleanup()
+                    resolve('ready')
+                }
+
+                const handleError = () => {
+                    clearTimeout(timeout)
+                    cleanup()
+                    resolve('error')
+                }
+
+                const cleanup = () => {
+                    preloadAudio.removeEventListener('canplaythrough', handleReady)
+                    preloadAudio.removeEventListener('canplay', handleReady)
+                    preloadAudio.removeEventListener('error', handleError)
+                }
+
+                // Wait for canplaythrough for smoother playback
+                preloadAudio.addEventListener('canplaythrough', handleReady)
+                preloadAudio.addEventListener('canplay', handleReady)
+                preloadAudio.addEventListener('error', handleError)
+                preloadAudio.load()
+            })
+
+            if (preloadResult === 'error') {
                 // Show toast notification for unsupported codec
                 const { toast } = await import('sonner')
                 toast.error(`${newCodec.toUpperCase()} is not supported in this browser`, {
                     description: 'Try Safari for full codec support, or select a different format.'
                 })
+                preloadAudio.src = ''
                 setIsCodecSwitching(false)
-                return // Don't switch - keep current codec
+                return
             }
 
-            // Test passed - proceed with switch
-            // Stop current playback safely
+            // Preload successful - seek the preload audio to current position
+            // Get exact time right before swap for accuracy  
+            const exactTime = audioRef.current?.currentTime || 0
+
+            if (isFinite(exactTime) && exactTime > 0 && isFinite(preloadAudio.duration)) {
+                preloadAudio.currentTime = Math.min(exactTime, preloadAudio.duration - 0.5)
+            }
+
+            // Wait a brief moment for seek to complete on preload audio
+            await new Promise(resolve => setTimeout(resolve, 100))
+
+            // NOW do the instant swap - current audio is still playing until this point
+            // Pause current playback
             audioRef.current.pause()
-            audioRef.current.removeAttribute('src')
-            audioRef.current.load()
 
             // Update codec state - triggers re-render with new streamUrl
             setCurrentCodec(newCodec)
+            setValidatedState({ trackId: currentTrack.id, codec: newCodec })
 
-            // Wait for React to update the DOM
-            await new Promise(resolve => setTimeout(resolve, 100))
+            // Wait for React to update the DOM with new src
+            await new Promise(resolve => setTimeout(resolve, 10))
 
-            // Reload audio with new source
+            // The audioRef now has the new src, load and play immediately
             if (audioRef.current) {
+                audioRef.current.volume = savedVolume
                 audioRef.current.load()
 
-                // Wait for audio to be playable
-                await new Promise<void>((resolve) => {
-                    const timeout = setTimeout(() => resolve(), 8000)
+                // Set position after load starts
+                audioRef.current.currentTime = preloadAudio.currentTime
 
-                    const handleCanPlay = () => {
-                        clearTimeout(timeout)
-                        audioRef.current?.removeEventListener('canplay', handleCanPlay)
-                        audioRef.current?.removeEventListener('error', handleError)
-                        resolve()
-                    }
-
-                    const handleError = () => {
-                        clearTimeout(timeout)
-                        audioRef.current?.removeEventListener('canplay', handleCanPlay)
-                        audioRef.current?.removeEventListener('error', handleError)
-                        resolve()
-                    }
-
-                    audioRef.current?.addEventListener('canplay', handleCanPlay)
-                    audioRef.current?.addEventListener('error', handleError)
-                })
-
-                // Restore position (guard against NaN/Infinity)
-                if (isFinite(savedTime) && savedTime > 0 && isFinite(savedDuration)) {
-                    audioRef.current.currentTime = Math.min(savedTime, savedDuration - 0.5)
-                }
-
-                // Restore volume
-                audioRef.current.volume = savedVolume
-
-                // Resume playback if was playing
+                // Resume playback immediately if was playing
+                // Browser will buffer as it plays since we already verified codec works
                 if (wasPlaying && audioRef.current) {
                     await audioRef.current.play().catch(e => {
                         if (e.name !== 'AbortError') {
@@ -622,6 +496,10 @@ export function Player() {
                     navigator.mediaSession.playbackState = wasPlaying ? 'playing' : 'paused'
                 }
             }
+
+            // Cleanup preload audio
+            preloadAudio.pause()
+            preloadAudio.src = ''
 
             // Save preference to server
             fetch(`/api/track/${currentTrack.id}/codecs`, {
@@ -798,24 +676,7 @@ export function Player() {
 
                 {/* Volume */}
                 <div className="flex items-center justify-end gap-2 w-1/3">
-                    {/* Spatial Audio / Head Tracking Toggle */}
-                    {spatialSupported && isSpatialCodec(currentCodec) && (
-                        <Button
-                            variant="ghost"
-                            size="icon"
-                            onClick={toggleHeadTracking}
-                            className={cn(
-                                "hover:text-primary relative",
-                                headTrackingEnabled && "text-blue-400"
-                            )}
-                            title={headTrackingEnabled ? "Disable Head Tracking" : "Enable Head Tracking (Spatial Audio)"}
-                        >
-                            <Headphones className="h-4 w-4" />
-                            {headTrackingEnabled && (
-                                <span className="absolute -top-0.5 -right-0.5 w-2 h-2 bg-blue-400 rounded-full animate-pulse" />
-                            )}
-                        </Button>
-                    )}
+
                     <Button variant="ghost" size="icon" onClick={toggleLyrics} className={cn("hover:text-primary", lyricsOpen && "text-primary")}>
                         <Mic2 className="h-4 w-4" />
                     </Button>
