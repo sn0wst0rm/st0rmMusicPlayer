@@ -1,4 +1,5 @@
 import * as React from "react"
+import { useDebounce } from "@/hooks/use-debounce"
 import { usePlayerStore, Track } from "@/lib/store"
 import { searchLibrary, SongSearchResult, AlbumSearchResult, ArtistSearchResult } from "@/lib/search"
 import { Album } from "@/types/music"
@@ -72,23 +73,38 @@ function SongRow({ song, allSongs, playTrack, onGoToArtist, onGoToAlbum }: {
 
 export function SearchView({ playTrack, playAlbum, onSelectAlbum }: SearchViewProps) {
     const { searchQuery, library, setCurrentView, navigateToArtist, setSelectedAlbum } = usePlayerStore()
+    const debouncedSearchQuery = useDebounce(searchQuery, 300)
+    const [isSearching, setIsSearching] = React.useState(false)
+
+    // Update loading state when query changes but before debounce resolves
+    React.useEffect(() => {
+        if (searchQuery !== debouncedSearchQuery) {
+            setIsSearching(true)
+        } else {
+            setIsSearching(false)
+        }
+    }, [searchQuery, debouncedSearchQuery])
 
     // Use the advanced search engine with fuzzy matching and relevance scoring
     const searchResults = React.useMemo(() => {
-        if (!searchQuery) return { songs: [], albums: [], artists: [] }
+        // Use debounced query for the expensive search operation
+        if (!debouncedSearchQuery) return { songs: [], albums: [], artists: [] }
 
-        const results = searchLibrary(searchQuery, library)
+        const results = searchLibrary(debouncedSearchQuery, library)
 
         // Extract items from search results (they're wrapped with score metadata)
         // Results are already sorted by relevance score
+        // LIMIT RESULTS TO OPTIMIZE PERFORMANCE
+        // Prioritize: 50 songs, 20 albums, 20 artists - this is enough for a view without pagination
         return {
-            songs: results.songs.map((r: SongSearchResult) => r.item),
-            albums: results.albums.map((r: AlbumSearchResult) => r.item),
-            artists: results.artists.map((r: ArtistSearchResult) => r.item)
+            songs: results.songs.slice(0, 50).map((r: SongSearchResult) => r.item),
+            albums: results.albums.slice(0, 20).map((r: AlbumSearchResult) => r.item),
+            artists: results.artists.slice(0, 20).map((r: ArtistSearchResult) => r.item)
         }
-    }, [searchQuery, library])
+    }, [debouncedSearchQuery, library])
 
-    if (!searchQuery) {
+    // Render loading state or empty state if just starting to type
+    if (!searchQuery && !debouncedSearchQuery) {
         return (
             <div className="flex flex-col h-full items-center justify-center p-8 text-center text-muted-foreground">
                 <p>Type something to search...</p>
@@ -96,7 +112,14 @@ export function SearchView({ playTrack, playAlbum, onSelectAlbum }: SearchViewPr
         )
     }
 
-    if (searchResults.songs.length === 0 && searchResults.albums.length === 0 && searchResults.artists.length === 0) {
+    // Show previous results or spinner if waiting for debounce? 
+    // Actually, keeping old results is better UX than flashing a spinner on every letter
+    // But if there are no results yet, maybe show spinner?
+    // For now, let's just let it be responsive. The delay is short (300ms).
+
+    const hasResults = searchResults.songs.length > 0 || searchResults.albums.length > 0 || searchResults.artists.length > 0
+
+    if (!isSearching && !hasResults && debouncedSearchQuery) {
         return (
             <div className="flex flex-col h-full items-center justify-center p-8 text-center">
                 <h2 className="text-xl font-semibold mb-2">No results found</h2>
@@ -110,7 +133,10 @@ export function SearchView({ playTrack, playAlbum, onSelectAlbum }: SearchViewPr
             <div className="px-8 pt-16 pb-32 space-y-8">
                 <div className="space-y-1">
                     <h1 className="text-3xl font-bold tracking-tight">Search</h1>
-                    <p className="text-muted-foreground">Results for &quot;{searchQuery}&quot;</p>
+                    <div className="flex items-center gap-2 text-muted-foreground">
+                        <p>Results for &quot;{searchQuery}&quot;</p>
+                        {isSearching && <div className="animate-spin rounded-full h-3 w-3 border-b-2 border-primary"></div>}
+                    </div>
                 </div>
 
                 {searchResults.songs.length > 0 && (

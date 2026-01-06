@@ -272,7 +272,9 @@ export function ImportSettings({ open, onOpenChange, onSettingsUpdate }: ImportS
                                 'aac': 1,
                                 'aac-he': 0.3,
                                 'aac-binaural': 1.2,
+                                'aac-he-binaural': 0.4,
                                 'aac-downmix': 1,
+                                'aac-he-downmix': 0.3,
                                 'atmos': 3,
                                 'ac3': 2.5,
                                 'alac': 4
@@ -333,8 +335,10 @@ export function ImportSettings({ open, onOpenChange, onSettingsUpdate }: ImportS
                                     { id: 'alac', label: 'Lossless', desc: 'Up to 24-bit/192kHz' },
                                     { id: 'atmos', label: 'Dolby Atmos', desc: '768kbps spatial' },
                                     { id: 'aac-binaural', label: 'Spatial Audio', desc: 'Binaural' },
+                                    { id: 'aac-he-binaural', label: 'HE Spatial', desc: 'HE Binaural' },
                                     { id: 'ac3', label: 'AC3', desc: '640kbps surround' },
                                     { id: 'aac-downmix', label: 'Downmix', desc: 'Stereo from surround' },
+                                    { id: 'aac-he-downmix', label: 'HE Downmix', desc: 'HE stereo from surround' },
                                 ].map((codec) => {
                                     const selectedList = (settings.songCodecs || 'aac-legacy').split(',').filter(Boolean)
                                     const isSelected = selectedList.includes(codec.id)

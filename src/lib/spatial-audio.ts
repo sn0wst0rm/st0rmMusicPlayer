@@ -64,6 +64,8 @@ export class SpatialAudioRenderer {
     private sourceNode: MediaElementAudioSourceNode | null = null
     private gainNode: GainNode | null = null
     private isInitialized = false
+    private isSpatialActive = false // Whether spatial processing is currently active
+    private connectedAudioElement: HTMLAudioElement | null = null // Track which element is connected
     private orientationHandler: ((event: DeviceOrientationEvent) => void) | null = null
     private headTrackingEnabled = false
 
@@ -85,8 +87,16 @@ export class SpatialAudioRenderer {
      * Initialize spatial audio for an audio element
      */
     async initialize(audioElement: HTMLAudioElement): Promise<boolean> {
-        if (this.isInitialized) {
+        // If already initialized with the SAME audio element, just enable spatial
+        if (this.isInitialized && this.connectedAudioElement === audioElement) {
+            this.enableSpatial()
             return true
+        }
+
+        // If initialized with a DIFFERENT audio element, we need to destroy first
+        if (this.isInitialized && this.connectedAudioElement !== audioElement) {
+            console.log('[SpatialAudio] Different audio element, destroying old context')
+            this.destroy()
         }
 
         try {
@@ -108,6 +118,7 @@ export class SpatialAudioRenderer {
 
             // Create nodes
             this.sourceNode = this.audioContext.createMediaElementSource(audioElement)
+            this.connectedAudioElement = audioElement
             this.gainNode = this.audioContext.createGain()
 
             // Create panner with HRTF for binaural rendering
@@ -126,12 +137,13 @@ export class SpatialAudioRenderer {
             this.pannerNode.positionY.setValueAtTime(this.sourcePosition.y, this.audioContext.currentTime)
             this.pannerNode.positionZ.setValueAtTime(this.sourcePosition.z, this.audioContext.currentTime)
 
-            // Connect the audio graph
+            // Connect the audio graph WITH spatial processing
             this.sourceNode.connect(this.pannerNode)
             this.pannerNode.connect(this.gainNode)
             this.gainNode.connect(this.audioContext.destination)
 
             this.isInitialized = true
+            this.isSpatialActive = true
             console.log('[SpatialAudio] Initialized successfully')
             return true
 
@@ -262,16 +274,19 @@ export class SpatialAudioRenderer {
     }
 
     /**
-     * Bypass spatial audio (direct connection)
+     * Bypass spatial audio (direct connection) - keeps AudioContext alive
      */
     bypass(): void {
         if (!this.sourceNode || !this.gainNode || !this.audioContext) return
+        if (!this.isSpatialActive) return // Already bypassed
 
         try {
             this.sourceNode.disconnect()
             this.sourceNode.connect(this.gainNode)
+            this.isSpatialActive = false
+            console.log('[SpatialAudio] Bypassed - direct connection')
         } catch (e) {
-            // Already connected
+            console.error('[SpatialAudio] Bypass failed:', e)
         }
     }
 
@@ -280,18 +295,21 @@ export class SpatialAudioRenderer {
      */
     enableSpatial(): void {
         if (!this.sourceNode || !this.pannerNode || !this.gainNode || !this.audioContext) return
+        if (this.isSpatialActive) return // Already active
 
         try {
             this.sourceNode.disconnect()
             this.sourceNode.connect(this.pannerNode)
-            this.pannerNode.connect(this.gainNode)
+            // Panner should already be connected to gain from init
+            this.isSpatialActive = true
+            console.log('[SpatialAudio] Spatial processing enabled')
         } catch (e) {
-            // Already connected
+            console.error('[SpatialAudio] Enable spatial failed:', e)
         }
     }
 
     /**
-     * Cleanup and disconnect
+     * Cleanup and disconnect - only call on unmount or audio element change
      */
     destroy(): void {
         this.disableHeadTracking()
@@ -300,25 +318,34 @@ export class SpatialAudioRenderer {
             try {
                 this.sourceNode.disconnect()
             } catch (e) { /* ignore */ }
+            this.sourceNode = null
         }
 
         if (this.pannerNode) {
             try {
                 this.pannerNode.disconnect()
             } catch (e) { /* ignore */ }
+            this.pannerNode = null
         }
 
         if (this.gainNode) {
             try {
                 this.gainNode.disconnect()
             } catch (e) { /* ignore */ }
+            this.gainNode = null
         }
 
         if (this.audioContext) {
-            this.audioContext.close()
+            try {
+                this.audioContext.close()
+            } catch (e) { /* ignore */ }
+            this.audioContext = null
         }
 
+        this.connectedAudioElement = null
         this.isInitialized = false
+        this.isSpatialActive = false
+
         console.log('[SpatialAudio] Destroyed')
     }
 

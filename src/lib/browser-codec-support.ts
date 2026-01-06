@@ -50,7 +50,9 @@ export const BROWSER_CODEC_COMPATIBILITY: BrowserCompatibilityTable = {
         'alac': true,           // ✅ ALAC works in Safari
         'atmos': true,          // ✅ Dolby Atmos works in Safari
         'aac-binaural': true,
+        'aac-he-binaural': true,
         'aac-downmix': true,
+        'aac-he-downmix': true,
         'ac3': true,
     },
 
@@ -63,7 +65,9 @@ export const BROWSER_CODEC_COMPATIBILITY: BrowserCompatibilityTable = {
         'alac': false,          // ❌ ALAC does NOT work in Chrome
         'atmos': false,         // ❌ Dolby Atmos does NOT work in Chrome
         'aac-binaural': true,
+        'aac-he-binaural': true,
         'aac-downmix': true,
+        'aac-he-downmix': true,
         'ac3': false,           // ❌ AC3 does NOT work in Chrome
     },
 
@@ -76,8 +80,10 @@ export const BROWSER_CODEC_COMPATIBILITY: BrowserCompatibilityTable = {
         'alac': false,          // ❌ ALAC does NOT work in Firefox
         'atmos': false,         // ❌ Dolby Atmos does NOT work in Firefox
         'aac-binaural': true,
+        'aac-he-binaural': true,
         'aac-downmix': true,
-        'ac3': false,           // ❌ AC3 does NOT work in Firefox
+        'aac-he-downmix': true,
+        'ac3': true,
     },
 
     // Edge (Chromium-based)
@@ -89,7 +95,9 @@ export const BROWSER_CODEC_COMPATIBILITY: BrowserCompatibilityTable = {
         'alac': false,          // ❌ ALAC does NOT work in Edge
         'atmos': false,         // ❌ Dolby Atmos does NOT work in Edge
         'aac-binaural': true,
+        'aac-he-binaural': true,
         'aac-downmix': true,
+        'aac-he-downmix': true,
         'ac3': false,
     },
 
@@ -102,7 +110,9 @@ export const BROWSER_CODEC_COMPATIBILITY: BrowserCompatibilityTable = {
         'alac': false,
         'atmos': false,
         'aac-binaural': true,
+        'aac-he-binaural': true,
         'aac-downmix': true,
+        'aac-he-downmix': true,
         'ac3': false,
     },
 
@@ -115,7 +125,9 @@ export const BROWSER_CODEC_COMPATIBILITY: BrowserCompatibilityTable = {
         'alac': false,
         'atmos': false,
         'aac-binaural': true,
+        'aac-he-binaural': true,
         'aac-downmix': true,
+        'aac-he-downmix': true,
         'ac3': false,
     },
 }
@@ -168,7 +180,9 @@ export function isCodecSupportedInBrowser(codec: string): boolean {
         'alac': ['audio/mp4; codecs="alac"', 'audio/x-m4a'],
         'atmos': ['audio/mp4; codecs="ec-3"', 'audio/mp4; codecs="ac-3"'],
         'aac-binaural': ['audio/mp4; codecs="mp4a.40.2"'],
+        'aac-he-binaural': ['audio/mp4; codecs="mp4a.40.5"'],
         'aac-downmix': ['audio/mp4; codecs="mp4a.40.2"'],
+        'aac-he-downmix': ['audio/mp4; codecs="mp4a.40.5"'],
         'ac3': ['audio/mp4; codecs="ac-3"', 'audio/ac3'],
     }
 

@@ -9,6 +9,7 @@ import {
     DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { ChevronDown, Waves, AlertTriangle } from "lucide-react"
+import { isCodecSupportedInBrowser } from "@/lib/browser-codec-support"
 
 // Codec display names and descriptions
 const CODEC_INFO: Record<string, { label: string; shortLabel: string; category: 'standard' | 'hires' | 'spatial' }> = {
@@ -16,43 +17,14 @@ const CODEC_INFO: Record<string, { label: string; shortLabel: string; category: 
     'aac-he-legacy': { label: 'AAC-HE 64kbps', shortLabel: 'AAC-HE', category: 'standard' },
     'aac': { label: 'AAC (48kHz)', shortLabel: 'AAC', category: 'standard' },
     'aac-he': { label: 'AAC-HE', shortLabel: 'AAC-HE', category: 'standard' },
-    'alac': { label: 'Lossless', shortLabel: 'Lossless', category: 'hires' },
+    'alac': { label: 'Lossless (ALAC)', shortLabel: 'Lossless', category: 'hires' },
     'atmos': { label: 'Dolby Atmos', shortLabel: 'Atmos', category: 'spatial' },
     'aac-binaural': { label: 'Spatial Audio', shortLabel: 'Spatial', category: 'spatial' },
+    'aac-he-binaural': { label: 'HE Spatial Audio', shortLabel: 'HE Spatial', category: 'spatial' },
     'aac-downmix': { label: 'Downmix', shortLabel: 'Downmix', category: 'standard' },
+    'aac-he-downmix': { label: 'HE Downmix', shortLabel: 'HE Downmix', category: 'standard' },
     'ac3': { label: 'AC3 Surround', shortLabel: 'AC3', category: 'spatial' },
-}
 
-// Check if browser supports a codec
-function checkCodecSupport(codec: string): boolean {
-    if (typeof window === 'undefined') return true // SSR
-
-    const audio = document.createElement('audio')
-
-    // MIME types for each codec
-    const mimeTypes: Record<string, string[]> = {
-        'aac-legacy': ['audio/mp4; codecs="mp4a.40.2"'],
-        'aac-he-legacy': ['audio/mp4; codecs="mp4a.40.5"'],
-        'aac': ['audio/mp4; codecs="mp4a.40.2"'],
-        'aac-he': ['audio/mp4; codecs="mp4a.40.5"'],
-        'alac': ['audio/mp4; codecs="alac"', 'audio/x-m4a'],
-        'atmos': ['audio/mp4; codecs="ec-3"', 'audio/mp4; codecs="ac-3"'],
-        'aac-binaural': ['audio/mp4; codecs="mp4a.40.2"'],
-        'aac-downmix': ['audio/mp4; codecs="mp4a.40.2"'],
-        'ac3': ['audio/mp4; codecs="ac-3"', 'audio/ac3'],
-    }
-
-    const codeMimes = mimeTypes[codec] || ['audio/mp4']
-
-    // Check if any of the MIME types are supported
-    for (const mime of codeMimes) {
-        const canPlay = audio.canPlayType(mime)
-        if (canPlay === 'probably' || canPlay === 'maybe') {
-            return true
-        }
-    }
-
-    return false
 }
 
 interface CodecSelectorProps {
@@ -112,13 +84,22 @@ export function CodecSelector({
             >
                 <Waves className="h-3 w-3" />
                 {currentInfo.shortLabel}
-                <ChevronDown className="h-3 w-3 opacity-60" />
+                <span className="inline-flex items-center justify-center w-3 h-3 flex-shrink-0" style={{ filter: 'none' }}>
+                    {isLoading ? (
+                        <svg className="h-3 w-3 animate-spin" style={{ animationTimingFunction: 'linear' }} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                            <circle className="opacity-25" cx="12" cy="12" r="10" />
+                            <path className="opacity-75" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" fill="currentColor" stroke="none" />
+                        </svg>
+                    ) : (
+                        <ChevronDown className="h-3 w-3 opacity-60" />
+                    )}
+                </span>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="start" className="min-w-[200px]">
                 {availableCodecs.map((codec) => {
                     const info = CODEC_INFO[codec] || { label: codec.toUpperCase(), shortLabel: codec, category: 'standard' }
                     const isSelected = codec === currentCodec
-                    const isSupported = checkCodecSupport(codec)
+                    const isSupported = isCodecSupportedInBrowser(codec)
 
                     return (
                         <DropdownMenuItem

@@ -779,13 +779,17 @@ const LyricsPanelContent = memo(function LyricsPanelContent({
             }
         }
         // Check for gap BETWEEN lines
-        else if (newActiveLine >= 0 && newActiveLine < lyrics.lines.length - 1) {
+        // When we've advanced early (due to endTime logic), we need to check the gap
+        // between the PREVIOUS line's endTime and the CURRENT (newActiveLine) line's startTime
+        else if (newActiveLine >= 1) {
+            // Check gap between previous line and current line
+            const prevLine = lyrics.lines[newActiveLine - 1]
             const currentLine = lyrics.lines[newActiveLine]
-            const nextLine = lyrics.lines[newActiveLine + 1]
 
-            // Only show dots if we have endTime (TTML/SRT format, not LRC)
-            if (currentLine.endTime) {
-                const state = calculateDotState(currentLine.endTime, nextLine.time)
+            // Only show dots if previous line has endTime (TTML/SRT format, not LRC)
+            if (prevLine.endTime) {
+                // Gap is from previous line's endTime to current line's startTime
+                const state = calculateDotState(prevLine.endTime, currentLine.time)
                 if (state) {
                     inGap = state.inGap
                     breathingProg = state.breathingProg
@@ -993,8 +997,10 @@ const LyricsPanelContent = memo(function LyricsPanelContent({
                                     showTranslation={showTranslation && lyrics.hasTranslation}
                                     showTransliteration={showTransliteration && lyrics.hasTransliteration}
                                 />
-                                {/* Show breathing dots after the active line during a gap */}
-                                {index === activeLine && isInGap && (
+                                {/* Show breathing dots BEFORE the active line during a gap */}
+                                {/* When we're in a gap, activeLine has already advanced to the NEXT line,
+                                    so we show dots after the PREVIOUS line (activeLine - 1) */}
+                                {index === activeLine - 1 && isInGap && activeLine >= 1 && (
                                     <BreathingDots
                                         breathingProgress={gapProgress}
                                         isInhaling={isInhaling}
