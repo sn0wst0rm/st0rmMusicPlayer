@@ -139,68 +139,143 @@ async function insertTrackToLibrary(event: TrackCompleteEvent): Promise<{ albumI
     });
 
     // 3. Upsert Track
-    const track = await db.track.upsert({
-        where: { filePath },
-        create: {
-            title: metadata.title || 'Unknown Track',
-            artistId: artist.id,
-            albumId: album.id,
-            filePath,
-            codecPaths: event.codecPaths ? JSON.stringify(event.codecPaths) : null,
-            duration: metadata.duration || null,
-            trackNumber: metadata.trackNumber || null,
-            trackTotal: metadata.trackTotal || null,
-            discNumber: metadata.discNumber || null,
-            discTotal: metadata.discTotal || null,
-            genre: metadata.genre || null,
-            composer: metadata.composer || null,
-            comment: metadata.comment || null,
-            copyright: metadata.copyright || null,
-            rating: metadata.rating || null,
-            isGapless: metadata.isGapless || null,
-            lyricsPath: lyricsPath || null,
-            lyrics: metadata.lyrics || null,
-            appleMusicId: metadata.appleMusicId || null,
-            storefront: metadata.storefront || null,
-            titleSort: metadata.titleSort || null,
-            artistSort: metadata.artistSort || null,
-            albumSort: metadata.albumSort || null,
-            composerSort: metadata.composerSort || null,
-            // Lyrics availability
-            audioLocale: metadata.audioLocale || null,
-            lyricsHasWordSync: metadata.lyricsHasWordSync || false,
-            lyricsTranslations: metadata.lyricsTranslations || null,
-            lyricsPronunciations: metadata.lyricsPronunciations || null
-        },
-        update: {
-            title: metadata.title || undefined,
-            codecPaths: event.codecPaths ? JSON.stringify(event.codecPaths) : undefined,
-            duration: metadata.duration || undefined,
-            trackNumber: metadata.trackNumber || undefined,
-            trackTotal: metadata.trackTotal || undefined,
-            discNumber: metadata.discNumber || undefined,
-            discTotal: metadata.discTotal || undefined,
-            genre: metadata.genre || undefined,
-            composer: metadata.composer || undefined,
-            comment: metadata.comment || undefined,
-            copyright: metadata.copyright || undefined,
-            rating: metadata.rating || undefined,
-            isGapless: metadata.isGapless || undefined,
-            lyricsPath: lyricsPath || undefined,
-            lyrics: metadata.lyrics || undefined,
-            appleMusicId: metadata.appleMusicId || undefined,
-            storefront: metadata.storefront || undefined,
-            titleSort: metadata.titleSort || undefined,
-            artistSort: metadata.artistSort || undefined,
-            albumSort: metadata.albumSort || undefined,
-            composerSort: metadata.composerSort || undefined,
-            // Lyrics availability
-            audioLocale: metadata.audioLocale || undefined,
-            lyricsHasWordSync: metadata.lyricsHasWordSync !== undefined ? metadata.lyricsHasWordSync : undefined,
-            lyricsTranslations: metadata.lyricsTranslations || undefined,
-            lyricsPronunciations: metadata.lyricsPronunciations || undefined
+    // Check if we already have this track (by Apple Music ID) but with a different file path
+    let existingTrack = null;
+    if (metadata.appleMusicId) {
+        existingTrack = await db.track.findFirst({
+            where: { appleMusicId: metadata.appleMusicId }
+        });
+    }
+
+    let track;
+    if (existingTrack) {
+        // Merge codecPaths
+        let mergedCodecPaths = {};
+        try {
+            if (existingTrack.codecPaths) {
+                mergedCodecPaths = { ...JSON.parse(existingTrack.codecPaths) };
+            }
+            if (event.codecPaths) {
+                mergedCodecPaths = { ...mergedCodecPaths, ...event.codecPaths };
+            }
+        } catch (e) {
+            console.error("Error merging codecPaths:", e);
         }
-    });
+
+        // Check for filePath unique constraint collision
+        // If another track (phantom/duplicate) already has this filePath, delete it to allow the update
+        const collidingTrack = await db.track.findUnique({
+            where: { filePath }
+        });
+
+        if (collidingTrack && collidingTrack.id !== existingTrack.id) {
+            console.log(`[Import] Deleting colliding track ${collidingTrack.id} to allow update of ${existingTrack.id}`);
+            await db.track.delete({
+                where: { id: collidingTrack.id }
+            });
+        }
+
+        // Update the EXISTING track, potentially changing its main filePath to the new one
+        // and updating metadata. We keep the ID stable.
+        track = await db.track.update({
+            where: { id: existingTrack.id },
+            data: {
+                title: metadata.title || undefined,
+                artistId: artist.id, // Update artist/album link if changed
+                albumId: album.id,
+                filePath, // Update to the new file path (assuming new download is preferred)
+                codecPaths: Object.keys(mergedCodecPaths).length > 0 ? JSON.stringify(mergedCodecPaths) : null,
+                duration: metadata.duration || undefined,
+                trackNumber: metadata.trackNumber || undefined,
+                trackTotal: metadata.trackTotal || undefined,
+                discNumber: metadata.discNumber || undefined,
+                discTotal: metadata.discTotal || undefined,
+                genre: metadata.genre || undefined,
+                composer: metadata.composer || undefined,
+                comment: metadata.comment || undefined,
+                copyright: metadata.copyright || undefined,
+                rating: metadata.rating || undefined,
+                isGapless: metadata.isGapless || undefined,
+                lyricsPath: lyricsPath || undefined,
+                lyrics: metadata.lyrics || undefined,
+                // appleMusicId is already same
+                storefront: metadata.storefront || undefined,
+                titleSort: metadata.titleSort || undefined,
+                artistSort: metadata.artistSort || undefined,
+                albumSort: metadata.albumSort || undefined,
+                composerSort: metadata.composerSort || undefined,
+                // Lyrics availability
+                audioLocale: metadata.audioLocale || undefined,
+                lyricsHasWordSync: metadata.lyricsHasWordSync !== undefined ? metadata.lyricsHasWordSync : undefined,
+                lyricsTranslations: metadata.lyricsTranslations || undefined,
+                lyricsPronunciations: metadata.lyricsPronunciations || undefined
+            }
+        });
+    } else {
+        // Normal upsert by filePath if no existing track found by ID
+        track = await db.track.upsert({
+            where: { filePath },
+            create: {
+                title: metadata.title || 'Unknown Track',
+                artistId: artist.id,
+                albumId: album.id,
+                filePath,
+                codecPaths: event.codecPaths ? JSON.stringify(event.codecPaths) : null,
+                duration: metadata.duration || null,
+                trackNumber: metadata.trackNumber || null,
+                trackTotal: metadata.trackTotal || null,
+                discNumber: metadata.discNumber || null,
+                discTotal: metadata.discTotal || null,
+                genre: metadata.genre || null,
+                composer: metadata.composer || null,
+                comment: metadata.comment || null,
+                copyright: metadata.copyright || null,
+                rating: metadata.rating || null,
+                isGapless: metadata.isGapless || null,
+                lyricsPath: lyricsPath || null,
+                lyrics: metadata.lyrics || null,
+                appleMusicId: metadata.appleMusicId || null,
+                storefront: metadata.storefront || null,
+                titleSort: metadata.titleSort || null,
+                artistSort: metadata.artistSort || null,
+                albumSort: metadata.albumSort || null,
+                composerSort: metadata.composerSort || null,
+                // Lyrics availability
+                audioLocale: metadata.audioLocale || null,
+                lyricsHasWordSync: metadata.lyricsHasWordSync || false,
+                lyricsTranslations: metadata.lyricsTranslations || null,
+                lyricsPronunciations: metadata.lyricsPronunciations || null
+            },
+            update: {
+                title: metadata.title || undefined,
+                codecPaths: event.codecPaths ? JSON.stringify(event.codecPaths) : undefined,
+                duration: metadata.duration || undefined,
+                trackNumber: metadata.trackNumber || undefined,
+                trackTotal: metadata.trackTotal || undefined,
+                discNumber: metadata.discNumber || undefined,
+                discTotal: metadata.discTotal || undefined,
+                genre: metadata.genre || undefined,
+                composer: metadata.composer || undefined,
+                comment: metadata.comment || undefined,
+                copyright: metadata.copyright || undefined,
+                rating: metadata.rating || undefined,
+                isGapless: metadata.isGapless || undefined,
+                lyricsPath: lyricsPath || undefined,
+                lyrics: metadata.lyrics || undefined,
+                appleMusicId: metadata.appleMusicId || undefined,
+                storefront: metadata.storefront || undefined,
+                titleSort: metadata.titleSort || undefined,
+                artistSort: metadata.artistSort || undefined,
+                albumSort: metadata.albumSort || undefined,
+                composerSort: metadata.composerSort || undefined,
+                // Lyrics availability
+                audioLocale: metadata.audioLocale || undefined,
+                lyricsHasWordSync: metadata.lyricsHasWordSync !== undefined ? metadata.lyricsHasWordSync : undefined,
+                lyricsTranslations: metadata.lyricsTranslations || undefined,
+                lyricsPronunciations: metadata.lyricsPronunciations || undefined
+            }
+        });
+    }
 
     return { albumId: album.id, artistId: artist.id, trackId: track.id };
 }
@@ -393,6 +468,7 @@ export async function GET(request: Request, { params }: RouteParams) {
                 }
 
                 console.log('[SSE] Starting to read SSE stream...');
+                let currentEventType = '';
 
                 while (true) {
                     const { done, value } = await reader.read();
@@ -406,8 +482,6 @@ export async function GET(request: Request, { params }: RouteParams) {
                     buffer += chunk;
                     const lines = buffer.split('\n');
                     buffer = lines.pop() || ''; // Keep incomplete line in buffer
-
-                    let currentEventType = '';
 
                     for (const line of lines) {
                         if (line.startsWith('event:')) {

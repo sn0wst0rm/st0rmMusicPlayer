@@ -47,12 +47,57 @@ export async function POST(request: Request) {
             }
         });
 
-        // Start the download via Python service (SSE stream)
-        // The status endpoint will handle the actual download and DB updates
+        // Trigger the download via Python service (Fire and Forget / Background)
+        try {
+            const pythonRes = await fetch(`${GAMDL_SERVICE_URL}/download`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    url: url,
+                    cookies: settings.cookies,
+                    output_path: settings.outputPath || './music',
+                    // Use selected codecs if provided, otherwise default to settings
+                    song_codecs: (Array.isArray(selectedCodecs) && selectedCodecs.length > 0)
+                        ? selectedCodecs.join(',')
+                        : (settings.songCodecs || 'aac-legacy'),
+                    lyrics_format: settings.lyricsFormat || 'ttml',
+                    cover_size: settings.coverSize || 1200,
+                    save_cover: settings.saveCover ?? true,
+                    language: settings.language || 'en-US',
+                    overwrite: settings.overwrite ?? false,
+                    // Pass empty strings for extended lyrics settings if not in DB yet
+                    lyrics_translation_langs: "",
+                    lyrics_pronunciation_langs: ""
+                })
+            });
+
+            if (!pythonRes.ok) {
+                const errText = await pythonRes.text();
+                console.error("Python service failed to start download:", errText);
+                // Update job status to failed
+                await db.importJob.update({
+                    where: { id: job.id },
+                    data: { status: 'failed' }
+                });
+                return NextResponse.json(
+                    { error: `Failed to start download service: ${errText}` },
+                    { status: 500 }
+                );
+            }
+
+        } catch (pyErr) {
+            console.error("Failed to contact Python service:", pyErr);
+            await db.importJob.update({
+                where: { id: job.id },
+                data: { status: 'failed' }
+            });
+            return NextResponse.json({ error: 'Failed to contact download service' }, { status: 500 });
+        }
+
         return NextResponse.json({
             jobId: job.id,
             status: 'pending',
-            message: 'Download queued. Use /api/import/status/{jobId} to stream progress.'
+            message: 'Download started.'
         });
     } catch (error) {
         console.error('Error starting import:', error);

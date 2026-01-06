@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { useState, useEffect, useCallback } from "react"
+import { useState, useEffect, useCallback, useRef } from "react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import {
@@ -47,6 +47,7 @@ interface ValidationResult {
     global_id?: string // Global playlist ID (pl.u-xxx)
     description?: string
     available_codecs?: string[]  // Available codecs for songs (from API)
+    downloaded_codecs?: string[] // Already downloaded codecs for this track
     error?: string
 }
 
@@ -77,6 +78,7 @@ export function ImportView() {
     const [batchResults, setBatchResults] = useState<ValidationResult[]>([])
     const [isDownloading, setIsDownloading] = useState(false)
     const [downloadProgress, setDownloadProgress] = useState<{ current: number, total: number } | null>(null)
+    const [currentJobId, setCurrentJobId] = useState<string | null>(null)
     const [importJobs, setImportJobs] = useState<ImportJob[]>([])
     const [showSettings, setShowSettings] = useState(false)
     const [showQueue, setShowQueue] = useState(false)
@@ -87,6 +89,9 @@ export function ImportView() {
     // Codec selection state for songs
     const [selectedCodecs, setSelectedCodecs] = useState<string[]>([])
     const [defaultCodecs, setDefaultCodecs] = useState<string[]>(['aac-legacy'])
+
+    // Ref to track currentJobId for WebSocket handler (avoids stale closure)
+    const jobIdRef = useRef<string | null>(null)
 
     // Check service health on mount
     const checkServiceHealth = useCallback(async () => {
@@ -117,7 +122,8 @@ export function ImportView() {
 
     const checkWrapperStatus = async () => {
         try {
-            const res = await fetch('http://localhost:5100/wrapper/status')
+            // Use Next.js API proxy instead of direct Python call
+            const res = await fetch('/api/wrapper/status')
             if (res.ok) {
                 const data = await res.json()
                 setWrapperNeedsAuth(data.needs_auth && data.is_running)
@@ -180,11 +186,20 @@ export function ImportView() {
 
                         // Initialize selected codecs for songs based on availability and defaults
                         if (item.type === 'song' && item.available_codecs?.length) {
-                            // Filter defaultCodecs to only those available
+                            // Filter defaultCodecs to only those available AND not already downloaded
                             const available = new Set(item.available_codecs)
-                            const initialSelection = defaultCodecs.filter(c => available.has(c))
-                            // If no defaults match, use first available
-                            setSelectedCodecs(initialSelection.length > 0 ? initialSelection : [item.available_codecs[0]])
+                            const downloaded = new Set(item.downloaded_codecs || [])
+
+                            // Select defaults that are available but NOT already downloaded
+                            const initialSelection = defaultCodecs.filter(c => available.has(c) && !downloaded.has(c))
+
+                            if (initialSelection.length > 0) {
+                                setSelectedCodecs(initialSelection)
+                            } else {
+                                // All defaults are downloaded - try first available that's not downloaded
+                                const firstNotDownloaded = item.available_codecs.find((c: string) => !downloaded.has(c))
+                                setSelectedCodecs(firstNotDownloaded ? [firstNotDownloaded] : [])
+                            }
                         } else {
                             setSelectedCodecs([])
                         }
@@ -216,6 +231,101 @@ export function ImportView() {
 
         return () => clearTimeout(timeout)
     }, [url])
+
+    // WebSocket handler to replace SSE
+    useEffect(() => {
+        if (!isDownloading) return
+
+        // Connect to Next.js WebSocket proxy (not directly to Python)
+        const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+        const ws = new WebSocket(`${wsProtocol}//${window.location.host}/ws`)
+
+        ws.onopen = () => {
+            console.log('Connected to Import WebSocket')
+        }
+
+        ws.onmessage = async (event) => {
+            try {
+                const message = JSON.parse(event.data)
+                const type = message.type
+                const data = message.data || {}
+
+                // Debug: log download_complete to trace metadata
+                if (type === 'download_complete') {
+                    console.log('[ImportView] download_complete received:', { type, data, metadata: data.metadata })
+                }
+
+                if (type === 'track_starting') {
+                    // data: { current, total, percent }
+                    setDownloadProgress({ current: data.current, total: data.total })
+                }
+                else if (type === 'download_complete') {
+                    // Track completed - insert into library via API
+                    try {
+                        const completeBody = {
+                            filePath: data.file_path,
+                            codecPaths: data.codec_paths,
+                            lyricsPath: data.lyrics_path,
+                            coverPath: data.cover_path,
+                            metadata: data.metadata,
+                            current: data.current,
+                            total: data.total,
+                            jobId: jobIdRef.current // Use ref to get latest jobId
+                        }
+
+                        const res = await fetch('/api/import/complete', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(completeBody)
+                        })
+
+                        if (!res.ok) {
+                            console.error('Failed to save track to DB')
+                        }
+
+                        // Update progress
+                        setDownloadProgress({ current: data.current, total: data.total })
+
+                        // Show toast - prefer metadata.title over top-level title
+                        const trackTitle = data.metadata?.title || data.title || 'Track'
+                        toast.success(`${trackTitle} imported successfully!`, {
+                            description: `Added to library.`,
+                        })
+
+                        if (data.current === data.total) {
+                            setIsDownloading(false)
+                            setValidationResult(null)
+                            setUrl('')
+                            fetchImportJobs()
+                            refreshLibrary()
+                            refreshPlaylists()
+                        }
+
+                    } catch (dbErr) {
+                        console.error('Error saving imported track:', dbErr)
+                    }
+                }
+                else if (type === 'download_failed') {
+                    console.error('Download failed:', data.error)
+                    toast.error('Download Failed', {
+                        description: data.error
+                    })
+                    setIsDownloading(false)
+                }
+
+            } catch (parseErr) {
+                console.error('WS Parse Error:', parseErr)
+            }
+        }
+
+        ws.onerror = (err) => {
+            console.error('WebSocket Error:', err)
+        }
+
+        return () => {
+            ws.close()
+        }
+    }, [isDownloading])
 
     const handleDownload = async () => {
         if (!validationResult?.valid || !url) return
@@ -251,85 +361,11 @@ export function ImportView() {
 
             const { jobId } = await startRes.json()
 
-            // Connect to SSE stream for progress
-            const eventSource = new EventSource(`/api/import/status/${jobId}`)
-            let completed = false
-
-            eventSource.addEventListener('track_complete', (e) => {
-                const data = JSON.parse(e.data)
-                setDownloadProgress({ current: data.current, total: data.total })
-            })
-
-            eventSource.addEventListener('already_exists', (e) => {
-                const data = JSON.parse(e.data)
-                console.log('Playlist already exists:', data.message)
-                // Mark as completed to prevent SSE error handler from firing
-                completed = true
-                // Show notification to user
-                toast.error('Playlist Already Imported', {
-                    description: data.message,
-                })
-                // Clean up state
-                eventSource.close()
-                setIsDownloading(false)
-                setDownloadProgress(null)
-                setUrl('')
-                setValidationResult(null)
-                fetchImportJobs()
-            })
-
-            eventSource.addEventListener('complete', (e) => {
-                completed = true
-                eventSource.close()
-                setIsDownloading(false)
-                setDownloadProgress(null)
-
-                // Parse completion data for navigation
-                let completeData: { importedAlbumId?: string; importedPlaylistId?: string; type?: string } = {}
-                try {
-                    completeData = JSON.parse(e.data)
-                } catch {
-                    // Ignore parse errors
-                }
-
-                // Show toast notification with action button
-                const importType = validationResult?.type || completeData.type || 'content'
-                const title = validationResult?.title || 'Content'
-
-                toast.success(`${title} imported successfully!`, {
-                    description: `Your ${importType} has been added to your library.`,
-                    action: {
-                        label: 'Open',
-                        onClick: () => {
-                            // Navigate based on type and imported IDs
-                            if (completeData.importedPlaylistId && importType === 'playlist') {
-                                navigateToPlaylist(completeData.importedPlaylistId)
-                            } else if (completeData.importedAlbumId) {
-                                // Refresh library to show updated albums
-                                // TODO: Add navigateToAlbum function to store
-                                refreshLibrary()
-                            }
-                        }
-                    }
-                })
-
-                setUrl('')
-                setValidationResult(null)
-                fetchImportJobs()
-                // Refresh library and playlists
-                refreshLibrary()
-                refreshPlaylists()
-            })
-
-            // SSE triggers 'error' event when connection closes (even normally after complete)
-            // Only log/handle if it occurred before completion
-            eventSource.onerror = () => {
-                if (!completed) {
-                    console.error('SSE connection error during download')
-                    eventSource.close()
-                    setIsDownloading(false)
-                }
-            }
+            // WebSocket connection is handled by the useEffect hook above.
+            // We just rely on the background job started by /api/import/start
+            console.log('Download started, job:', jobId)
+            setCurrentJobId(jobId)
+            jobIdRef.current = jobId // Store in ref for WebSocket handler
 
         } catch (err) {
             console.error('Download error:', err)
@@ -541,6 +577,7 @@ export function ImportView() {
                                     <div className="flex flex-wrap gap-2">
                                         {validationResult.available_codecs.map((codec) => {
                                             const isSelected = selectedCodecs.includes(codec)
+                                            const isDownloaded = validationResult.downloaded_codecs?.includes(codec)
                                             const codecLabels: Record<string, { label: string; category: 'standard' | 'hires' | 'spatial' }> = {
                                                 'aac-legacy': { label: 'AAC', category: 'standard' },
                                                 'aac-he-legacy': { label: 'AAC-HE', category: 'standard' },
@@ -561,28 +598,30 @@ export function ImportView() {
                                                     type="button"
                                                     onClick={() => {
                                                         if (isSelected) {
-                                                            // Don't allow deselecting the last codec
-                                                            if (selectedCodecs.length > 1) {
-                                                                setSelectedCodecs(selectedCodecs.filter(c => c !== codec))
-                                                            }
+                                                            setSelectedCodecs(selectedCodecs.filter(c => c !== codec))
                                                         } else {
                                                             setSelectedCodecs([...selectedCodecs, codec])
                                                         }
                                                     }}
                                                     className={cn(
-                                                        "px-3 py-1 rounded-full text-xs font-medium transition-all",
+                                                        "px-3 py-1 rounded-full text-xs font-medium transition-all flex items-center gap-1",
                                                         "border-2",
-                                                        isSelected
-                                                            ? info.category === 'hires'
-                                                                ? "border-purple-500 bg-purple-500/20 text-purple-600 dark:text-purple-300"
-                                                                : info.category === 'spatial'
-                                                                    ? "border-blue-500 bg-blue-500/20 text-blue-600 dark:text-blue-300"
-                                                                    : "border-primary bg-primary/20 text-primary"
-                                                            : "border-transparent bg-muted/50 text-muted-foreground hover:bg-muted"
+                                                        isDownloaded
+                                                            ? "border-green-500 bg-green-500/20 text-green-600 dark:text-green-300"
+                                                            : isSelected
+                                                                ? info.category === 'hires'
+                                                                    ? "border-purple-500 bg-purple-500/20 text-purple-600 dark:text-purple-300"
+                                                                    : info.category === 'spatial'
+                                                                        ? "border-blue-500 bg-blue-500/20 text-blue-600 dark:text-blue-300"
+                                                                        : "border-primary bg-primary/20 text-primary"
+                                                                : "border-transparent bg-muted/50 text-muted-foreground hover:bg-muted"
                                                     )}
                                                 >
+                                                    {isDownloaded && (
+                                                        <CheckCircle2 className="h-3 w-3" />
+                                                    )}
                                                     {info.label}
-                                                    {isSelected && <span className="ml-1">✓</span>}
+                                                    {isSelected && !isDownloaded && <span className="ml-1">✓</span>}
                                                 </button>
                                             )
                                         })}
@@ -660,7 +699,8 @@ export function ImportView() {
                             (!validationResult?.valid && batchResults.length === 0) ||
                             isDownloading ||
                             !gamdlServiceOnline ||
-                            !cookiesConfigured
+                            !cookiesConfigured ||
+                            (validationResult?.valid && selectedCodecs.length === 0)
                         }
                         onClick={batchResults.length > 0 ? handleBatchDownload : handleDownload}
                     >

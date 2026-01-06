@@ -24,12 +24,16 @@ export interface DownloadItem {
     artist: string
     album: string
     status: 'queued' | 'downloading' | 'completed' | 'skipped' | 'failed'
+    stage?: 'download' | 'decrypt' // current stage for downloading items
     progress?: number // 0-100
     fileSize?: number // bytes
+    totalBytes?: number // total file size
     filePath?: string
     reason?: string // for skipped/failed
     startTime?: number
     endTime?: number
+    eta?: number // estimated seconds remaining
+    speed?: number // bytes/sec for this item
 }
 
 interface QueueStats {
@@ -63,13 +67,20 @@ export function DownloadQueue({ open, onClose }: DownloadQueueProps) {
     useEffect(() => {
         if (!open) return
 
-        // Connect to WebSocket for real-time updates
-        const ws = new WebSocket('ws://localhost:5101')
+        // Connect to Next.js WebSocket proxy (not directly to Python)
+        const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+        const ws = new WebSocket(`${wsProtocol}//${window.location.host}/ws`)
 
         ws.onmessage = (event) => {
             try {
-                const data = JSON.parse(event.data)
-                handleDownloadEvent(data)
+                const message = JSON.parse(event.data)
+                // Server sends {type: string, data: object}
+                // Flatten to {type, ...data} for handler
+                const flatEvent = {
+                    type: message.type,
+                    ...(message.data || {})
+                }
+                handleDownloadEvent(flatEvent)
             } catch (e) {
                 console.error('Failed to parse WebSocket message:', e)
             }
@@ -103,7 +114,15 @@ export function DownloadQueue({ open, onClose }: DownloadQueueProps) {
             case 'download_progress':
                 setItems(prev => prev.map(item =>
                     item.trackId === event.track_id
-                        ? { ...item, progress: event.progress_pct, fileSize: event.bytes }
+                        ? {
+                            ...item,
+                            progress: event.progress_pct,
+                            fileSize: event.bytes,
+                            totalBytes: event.total_bytes,
+                            stage: event.stage, // 'download' or 'decrypt'
+                            eta: event.eta_seconds,
+                            speed: event.speed
+                        }
                         : item
                 ))
                 setStats(prev => ({ ...prev, currentSpeed: event.speed || 0 }))
@@ -339,12 +358,26 @@ export function DownloadQueue({ open, onClose }: DownloadQueueProps) {
 
                                 {/* Progress bar for downloading items */}
                                 {item.status === 'downloading' && item.progress !== undefined && (
-                                    <div className="mt-3">
+                                    <div className="mt-3 space-y-1.5">
                                         <div className="h-1.5 bg-muted rounded-full overflow-hidden">
                                             <div
                                                 className="h-full bg-blue-500 transition-all duration-300"
                                                 style={{ width: `${item.progress}%` }}
                                             />
+                                        </div>
+                                        {/* Stage and speed info */}
+                                        <div className="flex items-center justify-between text-xs text-muted-foreground">
+                                            <span className="capitalize">
+                                                {item.stage === 'decrypt' ? 'Decrypting...' : 'Downloading...'}
+                                            </span>
+                                            <div className="flex items-center gap-3">
+                                                {item.speed && item.speed > 0 && (
+                                                    <span>{formatSpeed(item.speed)}</span>
+                                                )}
+                                                {item.eta && item.eta > 0 && (
+                                                    <span>~{formatDuration(item.eta)}</span>
+                                                )}
+                                            </div>
                                         </div>
                                     </div>
                                 )}

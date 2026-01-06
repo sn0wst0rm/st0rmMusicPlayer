@@ -81,9 +81,8 @@ export function WrapperLoginModal({
 
     const startWrapperAuth = useCallback(async () => {
         try {
-            // The wrapper should already be started by gamdl service
-            // Connect directly to auth event stream
-            const es = new EventSource("http://localhost:5100/wrapper/auth/stream");
+            // Use Next.js API proxy instead of direct Python call
+            const es = new EventSource("/api/wrapper/auth/stream");
             setEventSource(es);
 
             es.onmessage = (event) => {
@@ -172,7 +171,8 @@ export function WrapperLoginModal({
         setError(null);
 
         try {
-            const res = await fetch("http://localhost:5100/wrapper/auth/submit", {
+            // Use Next.js API proxy instead of direct Python call
+            const res = await fetch("/api/wrapper/auth/submit", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ type: "credentials", username: email, password }),
@@ -197,7 +197,8 @@ export function WrapperLoginModal({
         setError(null);
 
         try {
-            const res = await fetch("http://localhost:5100/wrapper/auth/submit", {
+            // Use Next.js API proxy instead of direct Python call
+            const res = await fetch("/api/wrapper/auth/submit", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ type: "otp", code: otp }),
