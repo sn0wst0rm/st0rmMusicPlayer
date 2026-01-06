@@ -34,6 +34,7 @@ import {
 import { Switch } from "@/components/ui/switch"
 import { Loader2, CheckCircle2, AlertCircle } from "lucide-react"
 import { cn } from "@/lib/utils"
+import { CodecPrioritySettings } from "@/components/settings/CodecPrioritySettings"
 
 interface ImportSettingsProps {
     open: boolean
@@ -572,6 +573,11 @@ export function ImportSettings({ open, onOpenChange, onSettingsUpdate }: ImportS
                                 </div>
                             </>
                         )}
+                    </div>
+
+                    {/* Codec Priority */}
+                    <div className="pt-4 border-t">
+                        <CodecPrioritySettings />
                     </div>
                 </div>
 
