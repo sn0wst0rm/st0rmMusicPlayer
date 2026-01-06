@@ -294,6 +294,7 @@ def decrypt_samples(
     track_id: str,
     fairplay_key: str,
     samples: List[SampleInfo],
+    progress_callback=None,
 ) -> bytes:
     """
     Send samples to wrapper for CBCS decryption and return decrypted data.
@@ -307,7 +308,12 @@ def decrypt_samples(
     - For each sample: [4B LE truncated_size][truncated_data] -> read back [decrypted_data]
     - Key switch: [0,0,0,0]
     - Close: [0,0,0,0,0]
+    
+    Args:
+        progress_callback: Optional callback(current_sample, total_samples, bytes_processed) for progress tracking
     """
+    import time
+    
     host, port = wrapper_ip.split(":")
     port = int(port)
     
@@ -327,6 +333,10 @@ def decrypt_samples(
         last_desc_index = 255
         
         keys = [PREFETCH_KEY, fairplay_key]
+        total_samples = len(samples)
+        bytes_processed = 0
+        start_time = time.time()
+        last_progress_time = start_time
         
         for i, sample in enumerate(samples):
             # Check if we need to switch keys
@@ -368,10 +378,20 @@ def decrypt_samples(
                 if len(decrypted_sample) != truncated_len:
                     raise IOError(f"Short read: got {len(decrypted_sample)}, expected {truncated_len}")
                 decrypted_data.extend(decrypted_sample)
+                bytes_processed += truncated_len
             
             # Append clear bytes
             if truncated_len < sample_len:
                 decrypted_data.extend(sample.data[truncated_len:])
+                bytes_processed += (sample_len - truncated_len)
+            
+            # Call progress callback every 50 samples or 0.5s
+            now = time.time()
+            if progress_callback and (i % 50 == 0 or now - last_progress_time > 0.5 or i == total_samples - 1):
+                elapsed = now - start_time
+                speed = bytes_processed / elapsed if elapsed > 0 else 0
+                progress_callback(i + 1, total_samples, bytes_processed, speed)
+                last_progress_time = now
         
         # Send close signal
         sock_writer.write(bytes([0, 0, 0, 0, 0]))
@@ -750,6 +770,7 @@ async def decrypt_file(
     fairplay_key: str,
     input_path: str,
     output_path: str,
+    progress_callback=None,
 ) -> None:
     """
     Main decryption function - decrypt an encrypted MP4 file via the wrapper.
@@ -767,6 +788,7 @@ async def decrypt_file(
         fairplay_key: FairPlay key URI (skd://...)
         input_path: Path to encrypted MP4 file
         output_path: Path for decrypted output file
+        progress_callback: Optional callback(current, total, bytes, speed) for decryption progress
     """
     logger.info(f"Decrypting {input_path} -> {output_path}")
     
@@ -780,6 +802,7 @@ async def decrypt_file(
         track_id,
         fairplay_key,
         song_info.samples,
+        progress_callback,
     )
     
     # Write output file (preserve original structure, replace mdat content)

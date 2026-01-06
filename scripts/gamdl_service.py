@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Optional
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
@@ -57,6 +57,43 @@ def is_wrapper_required(codec: str) -> bool:
     """Check if a codec requires the wrapper for decryption."""
     return codec.lower() not in GAMDL_NATIVE_CODECS
 
+
+def extract_track_info_for_ws(download_item) -> dict:
+    """Extract track info from download_item for WebSocket broadcast events."""
+    info = {
+        "track_id": None,
+        "title": "Unknown",
+        "artist": "Unknown Artist",
+        "album": "Unknown Album"
+    }
+    
+    try:
+        # Try media_metadata first (dict with 'id' and 'attributes')
+        if hasattr(download_item, 'media_metadata') and download_item.media_metadata:
+            mm = download_item.media_metadata
+            if isinstance(mm, dict):
+                info["track_id"] = mm.get("id")
+                attrs = mm.get("attributes", {})
+                if attrs:
+                    info["title"] = attrs.get("name", info["title"])
+                    info["artist"] = attrs.get("artistName", info["artist"])
+                    info["album"] = attrs.get("albumName", info["album"])
+        
+        # Fallback to media_tags (object with properties)
+        if hasattr(download_item, 'media_tags') and download_item.media_tags:
+            mt = download_item.media_tags
+            if hasattr(mt, 'title') and mt.title:
+                info["title"] = str(mt.title)
+            if hasattr(mt, 'artist') and mt.artist:
+                info["artist"] = str(mt.artist)
+            if hasattr(mt, 'album') and mt.album:
+                info["album"] = str(mt.album)
+            if hasattr(mt, 'title_id') and mt.title_id:
+                info["track_id"] = str(mt.title_id)
+    except Exception as e:
+        print(f"[WS] Error extracting track info: {e}", flush=True)
+    
+    return info
 
 
 @asynccontextmanager
@@ -179,6 +216,9 @@ async def handle_ws_message(data: dict, websocket) -> Optional[dict]:
 
 async def broadcast_ws_event(event_type: str, data: dict):
     """Broadcast an event to all connected WebSocket clients."""
+    client_count = len(_ws_clients)
+    print(f"[WS BROADCAST] {event_type} -> {client_count} clients", flush=True)
+    
     if not _ws_clients:
         return
     
@@ -1265,6 +1305,7 @@ class ValidateUrlResponse(BaseModel):
     description: Optional[str] = None  # Playlist/album description
     extracted_url: Optional[str] = None  # Clean URL extracted from input
     available_codecs: Optional[list] = None  # List of available audio codecs for songs
+    downloaded_codecs: Optional[list] = None  # Codecs already downloaded for this track
     error: Optional[str] = None
 
 
@@ -1562,6 +1603,12 @@ async def get_syllable_lyrics(
         
         # Check if it actually has word-level timing (span elements)
         has_word_timing = "<span" in ttml
+        
+        # Debug: show structure to understand what we're getting
+        if not has_word_timing:
+            print(f"[LYRICS] TTML has no <span> elements (line-only). First 500 chars: {ttml[:500]}", flush=True)
+        else:
+            print(f"[LYRICS] TTML has <span> elements (word-synced)!", flush=True)
         
         # Extract available languages from xml:lang attributes in TTML
         # Note: The root <tt xml:lang="en"> is just a default, not an actual translation
@@ -1969,6 +2016,121 @@ async def extract_album_metadata_from_api(apple_music_api, content_id: str, is_l
     except Exception as e:
         print(f"Error extracting album metadata from API: {e}")
         return {}
+
+
+def extract_metadata_from_download_item(download_item, file_path: str = None) -> dict:
+    """
+    Extract track metadata from gamdl download_item using API data.
+    This uses media_metadata (API response) and media_tags instead of reading file tags.
+    """
+    metadata = {}
+    
+    try:
+        # Primary source: media_metadata from Apple Music API
+        if hasattr(download_item, 'media_metadata') and download_item.media_metadata:
+            mm = download_item.media_metadata
+            if isinstance(mm, dict):
+                attrs = mm.get('attributes', {})
+                if attrs:
+                    metadata['title'] = attrs.get('name')
+                    metadata['artist'] = attrs.get('artistName')
+                    metadata['album'] = attrs.get('albumName')
+                    metadata['albumArtist'] = attrs.get('albumName')  # Will be overwritten by media_tags if available
+                    metadata['genre'] = attrs.get('genreNames', [None])[0] if attrs.get('genreNames') else None
+                    metadata['composer'] = attrs.get('composerName')
+                    metadata['releaseDate'] = attrs.get('releaseDate')
+                    metadata['trackNumber'] = attrs.get('trackNumber')
+                    metadata['discNumber'] = attrs.get('discNumber')
+                    metadata['durationInMillis'] = attrs.get('durationInMillis')
+                    if metadata.get('durationInMillis'):
+                        metadata['duration'] = metadata['durationInMillis'] / 1000.0
+                    metadata['isrc'] = attrs.get('isrc')
+                    metadata['audioLocale'] = attrs.get('audioLocale')
+                    
+                    # Lyrics (plain text from API if available)
+                    if attrs.get('hasLyrics'):
+                        # Lyrics content is fetched separately by lyrics module
+                        pass
+        
+        # Secondary source: media_tags from gamdl (has more detailed info)
+        if hasattr(download_item, 'media_tags') and download_item.media_tags:
+            mt = download_item.media_tags
+            
+            # Override with media_tags values (more accurate)
+            if hasattr(mt, 'title') and mt.title:
+                metadata['title'] = str(mt.title)
+            if hasattr(mt, 'artist') and mt.artist:
+                metadata['artist'] = str(mt.artist)
+            if hasattr(mt, 'album') and mt.album:
+                metadata['album'] = str(mt.album)
+            if hasattr(mt, 'album_artist') and mt.album_artist:
+                metadata['albumArtist'] = str(mt.album_artist)
+            if hasattr(mt, 'genre') and mt.genre:
+                metadata['genre'] = str(mt.genre)
+            if hasattr(mt, 'composer') and mt.composer:
+                metadata['composer'] = str(mt.composer)
+            if hasattr(mt, 'copyright') and mt.copyright:
+                metadata['copyright'] = str(mt.copyright)
+            if hasattr(mt, 'release_date') and mt.release_date:
+                metadata['releaseDate'] = str(mt.release_date)
+            if hasattr(mt, 'track') and mt.track:
+                metadata['trackNumber'] = mt.track
+            if hasattr(mt, 'track_total') and mt.track_total:
+                metadata['trackTotal'] = mt.track_total
+            if hasattr(mt, 'disc') and mt.disc:
+                metadata['discNumber'] = mt.disc
+            if hasattr(mt, 'disc_total') and mt.disc_total:
+                metadata['discTotal'] = mt.disc_total
+            if hasattr(mt, 'lyrics') and mt.lyrics:
+                metadata['lyrics'] = str(mt.lyrics)
+            if hasattr(mt, 'rating') and mt.rating is not None:
+                # Convert MediaRating enum to int value for JSON serialization
+                rating = mt.rating
+                if hasattr(rating, 'value'):
+                    metadata['rating'] = rating.value
+                else:
+                    metadata['rating'] = int(rating) if rating else None
+            if hasattr(mt, 'gapless') and mt.gapless is not None:
+                metadata['isGapless'] = mt.gapless
+            if hasattr(mt, 'compilation') and mt.compilation is not None:
+                metadata['isCompilation'] = mt.compilation
+            
+            # Sort names
+            if hasattr(mt, 'title_sort') and mt.title_sort:
+                metadata['titleSort'] = str(mt.title_sort)
+            if hasattr(mt, 'artist_sort') and mt.artist_sort:
+                metadata['artistSort'] = str(mt.artist_sort)
+            if hasattr(mt, 'album_sort') and mt.album_sort:
+                metadata['albumSort'] = str(mt.album_sort)
+            if hasattr(mt, 'composer_sort') and mt.composer_sort:
+                metadata['composerSort'] = str(mt.composer_sort)
+        
+        # Get duration from file if not in API data (fallback)
+        if not metadata.get('duration') and file_path:
+            try:
+                from mutagen.mp4 import MP4
+                audio = MP4(file_path)
+                if audio.info and audio.info.length:
+                    metadata['duration'] = audio.info.length
+            except:
+                pass
+        
+        # Ensure we have sensible defaults
+        if not metadata.get('title'):
+            metadata['title'] = 'Unknown Title'
+        if not metadata.get('artist'):
+            metadata['artist'] = 'Unknown Artist'
+        if not metadata.get('album'):
+            metadata['album'] = 'Unknown Album'
+        if not metadata.get('albumArtist'):
+            metadata['albumArtist'] = metadata.get('artist', 'Unknown Artist')
+            
+    except Exception as e:
+        print(f"Error extracting metadata from download_item: {e}")
+        import traceback
+        traceback.print_exc()
+    
+    return metadata
 
 
 # --- API Endpoints ---
@@ -2668,531 +2830,745 @@ async def trigger_sync_check():
     return {"message": "Sync check triggered"}
 
 
+async def run_download_bg(request: DownloadRequest):
+    """Run download in background by consuming the generator."""
+    print(f"[BG] Starting background download for {request.url}", flush=True)
+    try:
+        async for _ in download_song(request):
+            pass  # Just execute the generator
+    except Exception as e:
+        print(f"[BG] Error in background download: {e}", flush=True)
+        traceback.print_exc()
+
 @app.post("/download")
-async def start_download(request: DownloadRequest):
-    """Start a download job and stream progress via SSE."""
+async def download_endpoint(request: DownloadRequest, background_tasks: BackgroundTasks):
+    """
+    Start download in background.
+    Events will be broadcast via WebSocket.
+    """
+    print(f"[API] Received download request for: {request.url}", flush=True)
     
-    async def event_generator():
-        print("[DEBUG] event_generator() called - starting...", flush=True)
-        cookies_path = None
+    # Start background task
+    background_tasks.add_task(run_download_bg, request)
+    
+    return {
+        "status": "started",
+        "message": "Download started in background",
+        "url": request.url
+    }
+
+# The original content of `start_download` and `event_generator` is moved here
+# and adapted to be a generator function `download_song`.
+async def download_song(request: DownloadRequest):
+    """Start a download job and stream progress via SSE."""
+    print("[DEBUG] download_song() called - starting...", flush=True)
+    cookies_path = None
+    try:
+        # Create temporary cookies file
+        cookies_path = await create_temp_cookies_file(request.cookies)
+        print(f"[DEBUG] Cookies file created at: {cookies_path}", flush=True)
+
+        
+        # Yield initial event
+        yield {
+            "event": "started",
+            "data": json.dumps({"status": "initializing", "message": "Starting download..."}),
+        }
+        print("[DEBUG] Yielded 'started' event", flush=True)
+        
+        # Import gamdl components
         try:
-            # Create temporary cookies file
-            cookies_path = await create_temp_cookies_file(request.cookies)
-            print(f"[DEBUG] Cookies file created at: {cookies_path}", flush=True)
-            
-            # Yield initial event
+            from gamdl.api import AppleMusicApi, ItunesApi
+            from gamdl.downloader import (
+                AppleMusicDownloader,
+                AppleMusicBaseDownloader,
+                AppleMusicSongDownloader,
+                AppleMusicMusicVideoDownloader,
+                AppleMusicUploadedVideoDownloader,
+            )
+            from gamdl.interface import (
+                AppleMusicInterface,
+                AppleMusicSongInterface,
+                AppleMusicMusicVideoInterface,
+                AppleMusicUploadedVideoInterface,
+            )
+            from gamdl.interface.enums import SongCodec, SyncedLyricsFormat
+            from gamdl.downloader.enums import CoverFormat
+        except ImportError as e:
             yield {
-                "event": "started",
-                "data": json.dumps({"status": "initializing", "message": "Starting download..."}),
+                "event": "error",
+                "data": json.dumps({"message": f"gamdl not installed: {e}"}),
             }
-            print("[DEBUG] Yielded 'started' event", flush=True)
+            return
+        
+        # Initialize gamdl API (use cached if available)
+        print("[DEBUG] Starting download - getting API...", flush=True)
+        yield {
+            "event": "progress",
+            "data": json.dumps({"percent": 5, "message": "Initializing Apple Music API..."}),
+        }
+        
+        try:
+            # Use the cached API to avoid 30-60s initialization delay
+            print("[DEBUG] Using get_or_create_api with cookies...", flush=True)
+            apple_music_api = await get_or_create_api(request.cookies)
+            print("[DEBUG] AppleMusicApi obtained!", flush=True)
             
-            # Import gamdl components
-            try:
-                from gamdl.api import AppleMusicApi, ItunesApi
-                from gamdl.downloader import (
-                    AppleMusicDownloader,
-                    AppleMusicBaseDownloader,
-                    AppleMusicSongDownloader,
-                    AppleMusicMusicVideoDownloader,
-                    AppleMusicUploadedVideoDownloader,
-                )
-                from gamdl.interface import (
-                    AppleMusicInterface,
-                    AppleMusicSongInterface,
-                    AppleMusicMusicVideoInterface,
-                    AppleMusicUploadedVideoInterface,
-                )
-                from gamdl.interface.enums import SongCodec, SyncedLyricsFormat
-                from gamdl.downloader.enums import CoverFormat
-            except ImportError as e:
-                yield {
-                    "event": "error",
-                    "data": json.dumps({"message": f"gamdl not installed: {e}"}),
-                }
-                return
-            
-            # Initialize gamdl API (use cached if available)
-            print("[DEBUG] Starting download - getting API...", flush=True)
+            itunes_api = ItunesApi(
+                apple_music_api.storefront,
+                apple_music_api.language,
+            )
+        except Exception as e:
+            print(f"[DEBUG] API initialization failed: {e}", flush=True)
             yield {
-                "event": "progress",
-                "data": json.dumps({"percent": 5, "message": "Initializing Apple Music API..."}),
+                "event": "error",
+                "data": json.dumps({"message": f"Failed to initialize API: {e}"}),
             }
-            
-            try:
-                # Use the cached API to avoid 30-60s initialization delay
-                print("[DEBUG] Using get_or_create_api with cookies...", flush=True)
-                apple_music_api = await get_or_create_api(request.cookies)
-                print("[DEBUG] AppleMusicApi obtained!", flush=True)
-                
-                itunes_api = ItunesApi(
-                    apple_music_api.storefront,
-                    apple_music_api.language,
-                )
-            except Exception as e:
-                print(f"[DEBUG] API initialization failed: {e}", flush=True)
-                yield {
-                    "event": "error",
-                    "data": json.dumps({"message": f"Failed to initialize API: {e}"}),
-                }
-                return
-            
-            # Check subscription
-            if not apple_music_api.active_subscription:
-                yield {
-                    "event": "error",
-                    "data": json.dumps({"message": "No active Apple Music subscription found"}),
-                }
-                return
-            
+            return
+        
+        # Check subscription
+        if not apple_music_api.active_subscription:
             yield {
-                "event": "progress",
-                "data": json.dumps({"percent": 10, "message": "API initialized, fetching content..."}),
+                "event": "error",
+                "data": json.dumps({"message": "No active Apple Music subscription found"}),
             }
-            
-            # Set up interfaces and downloader
-            interface = AppleMusicInterface(apple_music_api, itunes_api)
-            song_interface = AppleMusicSongInterface(interface)
-            
-            base_downloader = AppleMusicBaseDownloader(
-                wvd_path=str(WVD_PATH) if WVD_PATH.exists() else None,
-                output_path=Path(request.output_path),
-                temp_path=Path(tempfile.gettempdir()),
-                overwrite=request.overwrite,
-                save_cover=request.save_cover,
-                cover_size=request.cover_size,
-                cover_format=CoverFormat.JPG,
-            )
-            
-            # Parse comma-separated codec list, use first as primary
-            codec_list = [c.strip() for c in request.song_codecs.split(',') if c.strip()]
-            if not codec_list:
-                codec_list = ['aac-legacy']
-            primary_codec = codec_list[0]
-            print(f"[DEBUG] Requested codecs: {codec_list}, primary: {primary_codec}", flush=True)
-            
-            # Convert string settings to enums
-            codec_enum = SongCodec(primary_codec)
-            lyrics_format_enum = SyncedLyricsFormat(request.lyrics_format) if request.lyrics_format != "none" else None
-            
-            song_downloader = AppleMusicSongDownloader(
-                base_downloader=base_downloader,
-                interface=song_interface,
-                codec=codec_enum,
-                synced_lyrics_format=lyrics_format_enum if lyrics_format_enum else SyncedLyricsFormat.LRC,
-                no_synced_lyrics=(request.lyrics_format == "none"),
-            )
-            
-            # Create video interfaces and downloaders (required by AppleMusicDownloader)
-            music_video_interface = AppleMusicMusicVideoInterface(interface)
-            uploaded_video_interface = AppleMusicUploadedVideoInterface(interface)
-            
-            music_video_downloader = AppleMusicMusicVideoDownloader(
-                base_downloader=base_downloader,
-                interface=music_video_interface,
-            )
-            
-            uploaded_video_downloader = AppleMusicUploadedVideoDownloader(
-                base_downloader=base_downloader,
-                interface=uploaded_video_interface,
-            )
-            
-            downloader = AppleMusicDownloader(
-                interface=interface,
-                base_downloader=base_downloader,
-                song_downloader=song_downloader,
-                music_video_downloader=music_video_downloader,
-                uploaded_video_downloader=uploaded_video_downloader,
-            )
-            print("[DEBUG] AppleMusicDownloader created successfully")
-            
-            # Get download queue
-            print(f"[DEBUG] Getting URL info for: {request.url}")
-            url_info = downloader.get_url_info(request.url)
-            if not url_info:
-                print("[DEBUG] Failed to parse URL")
-                yield {
-                    "event": "error",
-                    "data": json.dumps({"message": "Failed to parse URL"}),
-                }
-                return
-            
-            print(f"[DEBUG] URL info: {url_info}")
-            print("[DEBUG] Getting download queue...")
-            download_queue = await downloader.get_download_queue(url_info)
-            if not download_queue:
-                print("[DEBUG] No downloadable content found")
-                yield {
-                    "event": "error",
-                    "data": json.dumps({"message": "No downloadable content found"}),
-                }
-                return
-            
-            print(f"[DEBUG] Download queue has {len(download_queue)} items")
-            total_tracks = len(download_queue)
-            
-            # Fetch extended album metadata from API
-            album_metadata = {}
-            url_parsed = parse_apple_music_url(request.url)
-            content_id = url_parsed.get("id") or url_parsed.get("track_id")
-            content_type = url_parsed.get("type")
-            is_library = content_id and content_id.startswith(("l.", "p.", "i."))
-            
-            if content_id and content_type in ("album", "song"):
-                # For songs, we need to get the album ID from the song data
-                if content_type == "song":
-                    try:
-                        # Get song data to find album ID
-                        song_data = await apple_music_api.get_song(content_id)
-                        if song_data:
-                            if isinstance(song_data, dict) and 'data' in song_data:
-                                data_list = song_data.get('data', [])
-                                if data_list:
-                                    song_data = data_list[0]
-                            
-                            # Extract album ID from relationships
-                            relationships = song_data.get("relationships", {})
-                            albums = relationships.get("albums", {}).get("data", [])
-                            if albums and len(albums) > 0:
-                                album_id = albums[0].get("id")
-                                if album_id:
-                                    print(f"[DEBUG] Song's album ID: {album_id}")
-                                    album_metadata = await extract_album_metadata_from_api(
-                                        apple_music_api, album_id, False
-                                    )
-                    except Exception as e:
-                        print(f"[DEBUG] Error getting album for song: {e}")
-                else:
-                    # For albums, use the content ID directly
-                    album_metadata = await extract_album_metadata_from_api(
-                        apple_music_api, content_id, is_library
-                    )
-            
+            return
+        
+        yield {
+            "event": "progress",
+            "data": json.dumps({"percent": 10, "message": "API initialized, fetching content..."}),
+        }
+        
+        # Set up interfaces and downloader
+        interface = AppleMusicInterface(apple_music_api, itunes_api)
+        song_interface = AppleMusicSongInterface(interface)
+        
+        base_downloader = AppleMusicBaseDownloader(
+            wvd_path=str(WVD_PATH) if WVD_PATH.exists() else None,
+            output_path=Path(request.output_path),
+            temp_path=Path(tempfile.gettempdir()),
+            overwrite=request.overwrite,
+            save_cover=request.save_cover,
+            cover_size=request.cover_size,
+            cover_format=CoverFormat.JPG,
+        )
+        
+        # Parse comma-separated codec list, use first as primary
+        codec_list = [c.strip() for c in request.song_codecs.split(',') if c.strip()]
+        if not codec_list:
+            codec_list = ['aac-legacy']
+        primary_codec = codec_list[0]
+        print(f"[DEBUG] Requested codecs: {codec_list}, primary: {primary_codec}", flush=True)
+        
+        # Convert string settings to enums
+        codec_enum = SongCodec(primary_codec)
+        lyrics_format_enum = SyncedLyricsFormat(request.lyrics_format) if request.lyrics_format != "none" else None
+        
+        song_downloader = AppleMusicSongDownloader(
+            base_downloader=base_downloader,
+            interface=song_interface,
+            codec=codec_enum,
+            synced_lyrics_format=lyrics_format_enum if lyrics_format_enum else SyncedLyricsFormat.LRC,
+            no_synced_lyrics=(request.lyrics_format == "none"),
+        )
+        
+        # Create video interfaces and downloaders (required by AppleMusicDownloader)
+        music_video_interface = AppleMusicMusicVideoInterface(interface)
+        uploaded_video_interface = AppleMusicUploadedVideoInterface(interface)
+        
+        music_video_downloader = AppleMusicMusicVideoDownloader(
+            base_downloader=base_downloader,
+            interface=music_video_interface,
+        )
+        
+        uploaded_video_downloader = AppleMusicUploadedVideoDownloader(
+            base_downloader=base_downloader,
+            interface=uploaded_video_interface,
+        )
+        
+        downloader = AppleMusicDownloader(
+            interface=interface,
+            base_downloader=base_downloader,
+            song_downloader=song_downloader,
+            music_video_downloader=music_video_downloader,
+            uploaded_video_downloader=uploaded_video_downloader,
+        )
+        print("[DEBUG] AppleMusicDownloader created successfully")
+        
+        # Get download queue
+        print(f"[DEBUG] Getting URL info for: {request.url}")
+        url_info = downloader.get_url_info(request.url)
+        if not url_info:
+            print("[DEBUG] Failed to parse URL")
             yield {
-                "event": "queue_ready",
-                "data": json.dumps({
-                    "total_tracks": total_tracks,
-                    "type": url_info.type if hasattr(url_info, "type") else "unknown",
-                }),
+                "event": "error",
+                "data": json.dumps({"message": "Failed to parse URL"}),
             }
-            
-            # Download each track
-            completed = 0
-            print(f"[DEBUG] Starting download loop for {total_tracks} tracks...", flush=True)
-            for i, download_item in enumerate(download_queue):
+            return
+        
+        print(f"[DEBUG] URL info: {url_info}")
+        print("[DEBUG] Getting download queue...")
+        download_queue = await downloader.get_download_queue(url_info)
+        if not download_queue:
+            print("[DEBUG] No downloadable content found")
+            yield {
+                "event": "error",
+                "data": json.dumps({"message": "No downloadable content found"}),
+            }
+            return
+        
+        print(f"[DEBUG] Download queue has {len(download_queue)} items")
+        total_tracks = len(download_queue)
+        
+        # Fetch extended album metadata from API
+        album_metadata = {}
+        url_parsed = parse_apple_music_url(request.url)
+        content_id = url_parsed.get("id") or url_parsed.get("track_id")
+        content_type = url_parsed.get("type")
+        is_library = content_id and content_id.startswith(("l.", "p.", "i."))
+        
+        if content_id and content_type in ("album", "song"):
+            # For songs, we need to get the album ID from the song data
+            if content_type == "song":
                 try:
-                    print(f"[DEBUG] Processing track {i + 1}/{total_tracks}", flush=True)
+                    # Get song data to find album ID
+                    song_data = await apple_music_api.get_song(content_id)
+                    if song_data:
+                        if isinstance(song_data, dict) and 'data' in song_data:
+                            data_list = song_data.get('data', [])
+                            if data_list:
+                                song_data = data_list[0]
+                        
+                        # Extract album ID from relationships
+                        relationships = song_data.get("relationships", {})
+                        albums = relationships.get("albums", {}).get("data", [])
+                        if albums and len(albums) > 0:
+                            album_id = albums[0].get("id")
+                            if album_id:
+                                print(f"[DEBUG] Song's album ID: {album_id}")
+                                album_metadata = await extract_album_metadata_from_api(
+                                    apple_music_api, album_id, False
+                                )
+                except Exception as e:
+                    print(f"[DEBUG] Error getting album for song: {e}")
+            else:
+                # For albums, use the content ID directly
+                album_metadata = await extract_album_metadata_from_api(
+                    apple_music_api, content_id, is_library
+                )
+        
+        yield {
+            "event": "queue_ready",
+            "data": json.dumps({
+                "total_tracks": total_tracks,
+                "type": url_info.type if hasattr(url_info, "type") else "unknown",
+            }),
+        }
+        
+        # Download each track
+        completed = 0
+        print(f"[DEBUG] Starting download loop for {total_tracks} tracks...", flush=True)
+        for i, download_item in enumerate(download_queue):
+            try:
+                print(f"[DEBUG] Processing track {i + 1}/{total_tracks}", flush=True)
+                yield {
+                    "event": "track_starting",
+                    "data": json.dumps({
+                        "current": i + 1,
+                        "total": total_tracks,
+                        "percent": int(10 + (80 * i / total_tracks)),
+                    }),
+                }
+                
+                # Broadcast download_started to WebSocket clients
+                track_info = extract_track_info_for_ws(download_item)
+                asyncio.create_task(broadcast_ws_event("download_started", {
+                    "track_id": track_info["track_id"],
+                    "title": track_info["title"],
+                    "artist": track_info["artist"],
+                    "album": track_info["album"],
+                    "current": i + 1,
+                    "total": total_tracks,
+                }))
+                
+                # Perform download for each codec
+                print(f"[DEBUG] Processing codecs: {codec_list} for track {i + 1}...", flush=True)
+                
+                import copy
+                import shutil
+                import uuid
+                request_id = str(uuid.uuid4())[:8]
+                primary_file_path = None
+                primary_download_item = download_item
+                codec_paths_map = {}
+                
+                for codec_idx, codec_name in enumerate(codec_list):
+                    try:
+                        # Use a specific staging directory for this codec to prevent collisions
+                        # and allow us to rename before moving to final destination
+                        staging_dir = Path(tempfile.gettempdir()) / f"gamdl_stage_{request_id}_{i}_{codec_name}"
+                        staging_dir.mkdir(parents=True, exist_ok=True)
+                        
+                        print(f"[DEBUG] Staging download for {codec_name} in: {staging_dir}", flush=True)
+                        
+                        # Re-initialize downloaders with staging output path
+                        # Use staging_dir for both output and temp to avoid confusion/mkdirs issues
+                        use_wrapper_for_codec = is_wrapper_required(codec_name)
+                        c_base_dl = AppleMusicBaseDownloader(
+                            wvd_path=str(WVD_PATH) if WVD_PATH.exists() else None,
+                            output_path=staging_dir, # Download to staging first
+                            temp_path=staging_dir,   # Use staging dir as temp root
+                            overwrite=True, # Always overwrite in staging
+                            save_cover=request.save_cover and (codec_idx == 0), # Only save cover once
+                            cover_size=request.cover_size,
+                            cover_format=CoverFormat.JPG,
+                            use_wrapper=use_wrapper_for_codec,
+                        )
+                        
+                        # Route Hi-Res/Spatial codecs (alac, atmos, etc.) to wrapper
+                        # Standard codecs (aac-legacy, aac-he-legacy) use gamdl native
+                        if use_wrapper_for_codec:
+                            c_song_dl = WrapperSongDownloader(
+                                base_downloader=c_base_dl,
+                                interface=song_interface,
+                                codec=SongCodec(codec_name),
+                                synced_lyrics_format=lyrics_format_enum if lyrics_format_enum else SyncedLyricsFormat.LRC,
+                                no_synced_lyrics=True, # Custom logic handles lyrics
+                            )
+                        else:
+                            c_song_dl = AppleMusicSongDownloader(
+                                base_downloader=c_base_dl,
+                                interface=song_interface,
+                                codec=SongCodec(codec_name),
+                                synced_lyrics_format=lyrics_format_enum if lyrics_format_enum else SyncedLyricsFormat.LRC,
+                                no_synced_lyrics=True, # Custom logic handles lyrics
+                            )
+                        
+                        c_mv_dl = AppleMusicMusicVideoDownloader(base_downloader=c_base_dl, interface=music_video_interface)
+                        c_uv_dl = AppleMusicUploadedVideoDownloader(base_downloader=c_base_dl, interface=uploaded_video_interface)
+                        
+                        c_downloader = AppleMusicDownloader(
+                            interface=interface,
+                            base_downloader=c_base_dl,
+                            song_downloader=c_song_dl,
+                            music_video_downloader=c_mv_dl,
+                            uploaded_video_downloader=c_uv_dl,
+                        )
+                        
+                        # Clone item to avoid side effects
+                        c_item = copy.copy(download_item)
+                        
+                        # Regenerate random_uuid and staged_path using the per-codec downloader
+                        # The original item has paths based on the main downloader's temp_path (/tmp),
+                        # but we need paths in the per-codec staging directory
+                        c_item.random_uuid = c_base_dl.get_random_uuid()
+                        if c_item.stream_info and c_item.stream_info.file_format:
+                            c_item.staged_path = c_base_dl.get_temp_path(
+                                c_item.media_metadata["id"],
+                                c_item.random_uuid,
+                                "staged",
+                                "." + c_item.stream_info.file_format.value,
+                            )
+                        else:
+                            # Fallback for when stream_info is not available
+                            c_item.staged_path = c_base_dl.get_temp_path(
+                                c_item.media_metadata["id"],
+                                c_item.random_uuid,
+                                "staged",
+                                ".m4a",
+                            )
+                        
+                        print(f"[DEBUG] Downloading {codec_name}...", flush=True)
+                        
+                        # For wrapper codecs, bypass gamdl's AppleMusicDownloader.download()
+                        # which expects an external amdecrypt executable.
+                        # Instead, call WrapperSongDownloader.download() directly
+                        # which uses our Python amdecrypt.py module.
+                        if use_wrapper_for_codec:
+                            # Get the current event loop for thread-safe callback
+                            main_loop = asyncio.get_running_loop()
+                            
+                            # Use a mutable container for last update time to keep state in closure
+                            progress_state = {"last_update": 0.0}
+                            
+                            # Create progress callback for WebSocket broadcast
+                            # This callback is called from a thread (via asyncio.to_thread)
+                            # so we need to use run_coroutine_threadsafe instead of create_task
+                            def wrapper_progress_callback(stage, current, total, bytes_done, speed):
+                                import time
+                                
+                                # Rate limit updates to max 2 per second (every 500ms)
+                                # Always send if complete (bytes_done == total) or first update
+                                now = time.time()
+                                is_complete = (total > 0 and bytes_done >= total)
+                                if not is_complete and (now - progress_state["last_update"] < 0.5):
+                                    return
+                                    
+                                progress_state["last_update"] = now
+
+                                # Calculate ETA
+                                if speed > 0 and total > 0 and bytes_done < total:
+                                    remaining_bytes = total - bytes_done
+                                    eta_seconds = remaining_bytes / speed
+                                else:
+                                    eta_seconds = 0
+                                
+                                # Use thread-safe coroutine scheduling
+                                asyncio.run_coroutine_threadsafe(
+                                    broadcast_ws_event("download_progress", {
+                                        "track_id": track_info["track_id"],
+                                        "title": track_info["title"],
+                                        "artist": track_info["artist"],
+                                        "stage": stage,  # 'download' or 'decrypt'
+                                        "progress_pct": int((current / total * 100) if total > 0 else 0),
+                                        "bytes": bytes_done,
+                                        "total_bytes": total,
+                                        "speed": speed,  # bytes/sec
+                                        "eta_seconds": eta_seconds,
+                                        "current": i + 1,
+                                        "total": total_tracks,
+                                    }),
+                                    main_loop
+                                )
+                            
+                            wrapper_result = await c_song_dl.download(c_item, progress_callback=wrapper_progress_callback)
+                            # WrapperSongDownloader.download() returns the final Path directly
+                            if wrapper_result:
+                                c_item.final_path = str(wrapper_result)
+                            
+                            c_result = c_item
+                        else:
+                            # Refresh stream info for this codec since c_item has info for primary codec
+                            # Only refresh/clear stream info if this is NOT the primary codec
+                            if codec_idx > 0:
+                                c_item.stream_info = None
+                                c_item.decryption_key = None
+                            
+                            # Reset final_path to force gamdl to calculate it based on our staging_dir
+                            # But we must provide a string to avoid "NoneType" error in native downloader
+                            if hasattr(c_item, "final_path") and c_item.final_path:
+                                # Reparent to staging_dir preserving directory structure relative to output path
+                                original_path = Path(c_item.final_path)
+                                try:
+                                    rel_path = original_path.relative_to(Path(request.output_path))
+                                    c_item.final_path = str(staging_dir / rel_path)
+                                except ValueError:
+                                    # Fallback if path not relative (unlikely)
+                                    c_item.final_path = str(staging_dir / original_path.name)
+
+                            c_result = await c_downloader.download(c_item)
+                        
+                        # Move files from staging to final destination preserving structure
+                        # Move files from staging to final destination preserving structure
+                        if c_result and hasattr(c_result, "final_path") and c_result.final_path:
+                            found_audio = False
+                            for root, dirs, files in os.walk(staging_dir):
+                                for file in files:
+                                    src_path = Path(root) / file
+                                    rel_path = src_path.relative_to(staging_dir)
+                                    
+                                    # Modify filename if audio - add [codec]
+                                    # Lyrics/Cover keep original name (no codec tag)
+                                    if src_path.suffix.lower() in ['.m4a', '.mp4', '.m4b', '.mov', '.m4v']:
+                                        new_name = f"{src_path.stem} [{codec_name}]{src_path.suffix}"
+                                        dest_rel_path = rel_path.parent / new_name
+                                        
+                                        # Record this as the main file for this codec
+                                        final_dest = Path(request.output_path) / dest_rel_path
+                                        codec_paths_map[codec_name] = str(final_dest)
+                                        found_audio = True
+                                    else:
+                                        # Lyrics, Cover, etc. - keep original name
+                                        dest_rel_path = rel_path
+                                        final_dest = Path(request.output_path) / dest_rel_path
+
+                                    final_dest.parent.mkdir(parents=True, exist_ok=True)
+                                    
+                                    if final_dest.exists() and request.overwrite:
+                                        final_dest.unlink()
+                                    
+                                    if not final_dest.exists():
+                                        shutil.move(str(src_path), str(final_dest))
+                                        print(f"[DEBUG] Moved {file} to: {final_dest}", flush=True)
+                            
+                            if found_audio:
+                                final_path_str = codec_paths_map.get(codec_name)
+                                
+                                # Set as primary if first successful one
+                                if final_path_str and not primary_file_path:
+                                    primary_file_path = final_path_str
+                                    # Update download_item to point to REAL final path for metadata extraction
+                                    download_item.final_path = final_path_str
+                        else:
+                            # If c_result is None or final_path is missing, it means download failed or file already existed and overwrite=False
+                            # In this case, we still want to populate codec_paths_map if the file exists and overwrite is false
+                            if not request.overwrite and c_result and hasattr(c_result, "final_path") and c_result.final_path:
+                                # This path is for when the file already existed and was not overwritten
+                                final_path_str = c_result.final_path
+                                codec_paths_map[codec_name] = final_path_str
+                                if not primary_file_path:
+                                    primary_file_path = final_path_str
+                                    download_item.final_path = final_path_str
+                            else:
+                                print(f"[DEBUG] Download for {codec_name} did not yield a final path.", flush=True)
+                                # No final path, so no entry in codec_paths_map for this codec
+                                
+                    except Exception as dl_err:
+                        print(f"[ERROR] Failed to download {codec_name} for track {i+1}: {dl_err}", flush=True)
+                        # Continue to next codec
+                
+                if primary_file_path:
+                    file_path = primary_file_path
+                    result = primary_download_item # Use original item (updated) for subsequent logic
+                    
+                    # Extract metadata from download_item (API data, not file tags)
+                    try:
+                        metadata = extract_metadata_from_download_item(download_item, file_path)
+                    except Exception as e:
+                        print(f"Metadata extraction failed: {e}")
+                        metadata = {}
+
+                    # ... (Rest of logic continues using 'file_path' variable)
+                    
+                    # Extract Apple Music IDs from download_item
+                    apple_ids = extract_apple_music_ids_from_item(download_item)
+                    metadata.update(apple_ids)
+                    
+                    # Merge album-level metadata from API
+                    metadata.update(album_metadata)
+                    
+                    # Find lyrics file if it exists (in final output path)
+                    lyrics_path = None
+                    lyrics_type = None
+                    
+                    # Map lyrics format from request
+                    lyric_target_exists = False
+                    if request.lyrics_format != "none":
+                        # Check for lyrics file with same base name as the primary file
+                        # Since we renamed the audio file, the lyrics might not match if they were moved blindly
+                        # But we moved extras.
+                        # Standard gamdl naming for lyrics matches audio filename base.
+                        # Since we renamed audio to "Title [Codec]", we need to check if lyrics were renamed?
+                        # No, we moved extras "as is" or with original name.
+                        # If we moved "Title.lrc", it won't match "Title [Codec].m4a".
+                        # This is a small issue. We should rename lyrics to match the primary audio file?
+                        # Or just look for "Title.lrc".
+                        pass
+                        
+                    # Re-implement lyrics discovery based on Primary File Path stem
+                    # If primary file is "Title [Codec].m4a", we look for "Title [Codec].lrc"?
+                    # Or just "Title.lrc"?
+                    # The code below uses Path(file_path).with_suffix().
+                    # So it looks for "Title [Codec].lrc".
+                    # But we saved "Title.lrc" (probably).
+                    
+                    # We should rename the lyrics file to match the primary audio file if we want them associated.
+                    
+                        # Calculate clean base path for lyrics (without codec tags)
+                        try:
+                            # Calculate clean base path for lyrics (without codec tags)
+                            stem = Path(file_path).stem
+                            clean_stem = stem
+                            if " [" in stem and stem.endswith("]"):
+                                import re
+                                clean_stem = re.sub(r" \[[^\]]+\]$", "", stem)
+                            
+                            clean_path = Path(file_path).parent / clean_stem
+                            clean_lrc = clean_path.with_suffix(f".{request.lyrics_format}")
+                            
+                            potential_lrc = Path(file_path).with_suffix(f".{request.lyrics_format}")
+                            
+                            if clean_lrc.exists():
+                                lyrics_path = str(clean_lrc)
+                            elif potential_lrc.exists():
+                                lyrics_path = str(potential_lrc)
+                        except Exception as e:
+                            print(f"[WARNING] Error determining clean lyrics path: {e}", flush=True)
+                        
+                        # Try to get word-by-word lyrics if we have the song's Apple Music ID
+                        # Note: extract_apple_music_ids_from_item returns 'appleMusicId' for songs
+                        song_apple_id = apple_ids.get("appleMusicId") or metadata.get("appleMusicId")
+                        print(f"[LYRICS] song_apple_id={song_apple_id}, lyrics_format={request.lyrics_format}", flush=True)
+                        if song_apple_id and request.lyrics_format != "none":
+                            try:
+                                # Get translation languages from settings
+                                translation_langs = getattr(request, 'lyrics_translation_langs', '').split(',')
+                                translation_langs = [l.strip() for l in translation_langs if l.strip()]
+                                
+                                # Fetch all lyrics variants using the new comprehensive function
+                                lyrics_variants = await fetch_all_lyrics_variants(
+                                    apple_music_api,
+                                    song_apple_id,
+                                    translation_langs,
+                                    storefront=apple_music_api.storefront
+                                )
+                                
+                                # Store audioLocale
+                                if lyrics_variants["audio_locale"]:
+                                    metadata["audioLocale"] = lyrics_variants["audio_locale"]
+                                
+                                # Save original lyrics
+                                if lyrics_variants["original"] and lyrics_variants["original"].get("ttml"):
+                                    ttml_path = clean_path.with_suffix(".ttml")
+                                    ttml_path.write_text(lyrics_variants["original"]["ttml"], encoding="utf-8")
+                                    lyrics_path = str(ttml_path)
+                                    metadata["lyricsHasWordSync"] = lyrics_variants["original"].get("has_word_timing", False)
+                                    print(f"[LYRICS] Saved original lyrics to {lyrics_path}", flush=True)
+                                
+                                # Save translations as separate files and track paths
+                                translation_paths = {}
+                                for lang, ttml_content in lyrics_variants["translations"].items():
+                                    trans_path = clean_path.with_suffix(f".{lang}.ttml")
+                                    trans_path.write_text(ttml_content, encoding="utf-8")
+                                    translation_paths[lang] = str(trans_path)
+                                    print(f"[LYRICS] Saved {lang} translation to {trans_path}", flush=True)
+                                
+                                if translation_paths:
+                                    metadata["lyricsTranslations"] = json.dumps(translation_paths)
+                                
+                                # Save romanization (if separate file, not embedded)
+                                if lyrics_variants["romanization"] and lyrics_variants["romanization"] != "embedded":
+                                    script = lyrics_variants["romanization_script"]
+                                    roman_path = clean_path.with_suffix(f".{script}.ttml")
+                                    roman_path.write_text(lyrics_variants["romanization"], encoding="utf-8")
+                                    metadata["lyricsPronunciations"] = json.dumps({script: str(roman_path)})
+                                    print(f"[LYRICS] Saved romanization ({script}) to {roman_path}", flush=True)
+                                elif lyrics_variants["romanization"] == "embedded":
+                                    # Romanization is embedded in original TTML, just record the script
+                                    script = lyrics_variants["romanization_script"]
+                                    metadata["lyricsPronunciations"] = json.dumps({script: "embedded"})
+                                    print(f"[LYRICS] Romanization ({script}) is embedded in original", flush=True)
+                                
+                            except Exception as lyrics_err:
+                                import traceback
+                                print(f"[LYRICS] Error fetching lyrics: {lyrics_err}", flush=True)
+                                traceback.print_exc()
+                    
+                    # Find lyrics file - heuristic: check for .lrc with same base name (ignoring [Codec])
+                    # or just check specific patterns since we moved them "as is"
+                    if not lyrics_path and request.lyrics_format != "none":
+                        # Try to find matching lyrics file
+                        # Since we renamed audio to "Title [Codec].m4a", the lyrics are likely "Title.lrc"
+                        # We can try to guess "Title.lrc" by stripping " [Codec]"
+                        # But better: just pass the lyrics path if we found it in the loop?
+                        # For simplicity, let's look for the .lrc file corresponding to the *renamed* file first (unlikely)
+                        # then the base name.
+                        
+                        base_stem = Path(file_path).stem
+                        # Try stripping known codec suffixes
+                        for c_name in codec_list:
+                            if f" [{c_name}]" in base_stem:
+                                base_stem = base_stem.replace(f" [{c_name}]", "")
+                        
+                        potential_lrc_base = Path(file_path).parent / f"{base_stem}.{request.lyrics_format}"
+                        if potential_lrc_base.exists():
+                            lyrics_path = str(potential_lrc_base)
+                        else:
+                            # Try exact match (rare if we renamed)
+                            potential_lrc_exact = Path(file_path).with_suffix(f".{request.lyrics_format}")
+                            if potential_lrc_exact.exists():
+                                lyrics_path = str(potential_lrc_exact)
+                    
+                    # Find cover file
+                    cover_path = None
+                    if request.save_cover:
+                        potential_cover = Path(file_path).parent / "cover.jpg"
+                        if potential_cover.exists():
+                            cover_path = str(potential_cover)
+
                     yield {
-                        "event": "track_starting",
+                        "event": "track_complete",
                         "data": json.dumps({
+                            "codec_paths": codec_paths_map, # Include the map of all downloaded files
+                            "codecPaths": codec_paths_map,  # Redundant key for TS compatibility to ensure frontend receives the full map
+                            "filePath": file_path,
+                            # removed duplicate codecPaths key that was overwriting the map
+                            "lyricsPath": lyrics_path,
+                            "coverPath": cover_path,
+                            "metadata": metadata,
                             "current": i + 1,
                             "total": total_tracks,
-                            "percent": int(10 + (80 * i / total_tracks)),
                         }),
                     }
                     
-                    # Perform download for each codec
-                    print(f"[DEBUG] Processing codecs: {codec_list} for track {i + 1}...", flush=True)
+                    # Broadcast download_complete to WebSocket clients
+                    file_size = Path(file_path).stat().st_size if Path(file_path).exists() else 0
+                    asyncio.create_task(broadcast_ws_event("download_complete", {
+                        "track_id": track_info["track_id"],
+                        "title": metadata.get("title", track_info["title"]),
+                        "artist": metadata.get("artist", track_info["artist"]),
+                        "album": metadata.get("album", track_info["album"]),
+                        "file_path": file_path,
+                        "file_size": file_size,
+                        "codec_paths": codec_paths_map,
+                        "lyrics_path": lyrics_path,
+                        "cover_path": cover_path,
+                        "metadata": metadata,
+                        "current": i + 1,
+                        "total": total_tracks,
+                    }))
                     
-                    import copy
-                    import shutil
-                    import uuid
-                    request_id = str(uuid.uuid4())[:8]
-                    primary_file_path = None
-                    primary_download_item = download_item
-                    codec_paths_map = {}
+                    completed += 1
+                else:
+                    yield {
+                        "event": "track_error",
+                        "data": json.dumps({
+                            "current": i + 1,
+                            "total": total_tracks,
+                            "message": "Download returned no result",
+                        }),
+                    }
                     
-                    for codec_idx, codec_name in enumerate(codec_list):
-                        try:
-                            # Use a specific staging directory for this codec to prevent collisions
-                            # and allow us to rename before moving to final destination
-                            staging_dir = Path(tempfile.gettempdir()) / f"gamdl_stage_{request_id}_{i}_{codec_name}"
-                            staging_dir.mkdir(parents=True, exist_ok=True)
-                            
-                            print(f"[DEBUG] Staging download for {codec_name} in: {staging_dir}", flush=True)
-                            
-                            # Re-initialize downloaders with staging output path
-                            # Use staging_dir for both output and temp to avoid confusion/mkdirs issues
-                            use_wrapper_for_codec = is_wrapper_required(codec_name)
-                            c_base_dl = AppleMusicBaseDownloader(
-                                wvd_path=str(WVD_PATH) if WVD_PATH.exists() else None,
-                                output_path=staging_dir, # Download to staging first
-                                temp_path=staging_dir,   # Use staging dir as temp root
-                                overwrite=True, # Always overwrite in staging
-                                save_cover=request.save_cover and (codec_idx == 0), # Only save cover once
-                                cover_size=request.cover_size,
-                                cover_format=CoverFormat.JPG,
-                                use_wrapper=use_wrapper_for_codec,
-                            )
-                            
-                            # Route Hi-Res/Spatial codecs (alac, atmos, etc.) to wrapper
-                            # Standard codecs (aac-legacy, aac-he-legacy) use gamdl native
-                            if use_wrapper_for_codec:
-                                c_song_dl = WrapperSongDownloader(
-                                    base_downloader=c_base_dl,
-                                    interface=song_interface,
-                                    codec=SongCodec(codec_name),
-                                )
-                            else:
-                                c_song_dl = AppleMusicSongDownloader(
-                                    base_downloader=c_base_dl,
-                                    interface=song_interface,
-                                    codec=SongCodec(codec_name),
-                                    synced_lyrics_format=lyrics_format_enum if lyrics_format_enum else SyncedLyricsFormat.LRC,
-                                    no_synced_lyrics=(request.lyrics_format == "none") or (codec_idx > 0), # Only lyrics for first codec
-                                )
-                            
-                            c_mv_dl = AppleMusicMusicVideoDownloader(base_downloader=c_base_dl, interface=music_video_interface)
-                            c_uv_dl = AppleMusicUploadedVideoDownloader(base_downloader=c_base_dl, interface=uploaded_video_interface)
-                            
-                            c_downloader = AppleMusicDownloader(
-                                interface=interface,
-                                base_downloader=c_base_dl,
-                                song_downloader=c_song_dl,
-                                music_video_downloader=c_mv_dl,
-                                uploaded_video_downloader=c_uv_dl,
-                            )
-                            
-                            # Clone item to avoid side effects
-                            c_item = copy.copy(download_item)
-                            
-                            # Regenerate random_uuid and staged_path using the per-codec downloader
-                            # The original item has paths based on the main downloader's temp_path (/tmp),
-                            # but we need paths in the per-codec staging directory
-                            c_item.random_uuid = c_base_dl.get_random_uuid()
-                            if c_item.stream_info and c_item.stream_info.file_format:
-                                c_item.staged_path = c_base_dl.get_temp_path(
-                                    c_item.media_metadata["id"],
-                                    c_item.random_uuid,
-                                    "staged",
-                                    "." + c_item.stream_info.file_format.value,
-                                )
-                            else:
-                                # Fallback for when stream_info is not available
-                                c_item.staged_path = c_base_dl.get_temp_path(
-                                    c_item.media_metadata["id"],
-                                    c_item.random_uuid,
-                                    "staged",
-                                    ".m4a",
-                                )
-                            
-                            print(f"[DEBUG] Downloading {codec_name}...", flush=True)
-                            
-                            # For wrapper codecs, bypass gamdl's AppleMusicDownloader.download()
-                            # which expects an external amdecrypt executable.
-                            # Instead, call WrapperSongDownloader.download() directly
-                            # which uses our Python amdecrypt.py module.
-                            if use_wrapper_for_codec:
-                                wrapper_result = await c_song_dl.download(c_item)
-                                # WrapperSongDownloader.download() returns the final Path directly
-                                if wrapper_result:
-                                    c_item.final_path = str(wrapper_result)
-                                c_result = c_item
-                            else:
-                                c_result = await c_downloader.download(c_item)
-                            
-                            if c_result and hasattr(c_result, "final_path") and c_result.final_path:
-                                staged_path = Path(c_result.final_path)
-                                
-                                # Determine final filename with codec suffix
-                                if staged_path.suffix.lower() in ['.m4a', '.mp4', '.m4b', '.mov', '.m4v']:
-                                    new_filename = f"{staged_path.stem} [{codec_name}]{staged_path.suffix}"
-                                else:
-                                    new_filename = staged_path.name
-                                    
-                                final_dest = Path(request.output_path) / new_filename
-                                
-                                # Ensure output dir exists
-                                final_dest.parent.mkdir(parents=True, exist_ok=True)
-                                
-                                # Move file to final destination
-                                if final_dest.exists() and request.overwrite:
-                                    final_dest.unlink()
-                                
-                                if not final_dest.exists():
-                                    shutil.move(str(staged_path), str(final_dest))
-                                    print(f"[DEBUG] Moved {codec_name} to: {final_dest}", flush=True)
-                                    
-                                    # Move lyrics/cover if generated in staging
-                                    for extra in staging_dir.glob("*"):
-                                        if extra.is_file() and extra.name != staged_path.name:
-                                            # It's an extra file (lyrics, cover)
-                                            # We generally only want these once, and they might not have codec suffix
-                                            # If it's lyrics, maybe rename too?
-                                            # For now, let's move them if they don't exist
-                                            extra_dest = Path(request.output_path) / extra.name
-                                            if not extra_dest.exists():
-                                                shutil.move(str(extra), str(extra_dest))
-                                
-                                    final_path_str = str(final_dest)
-                                    codec_paths_map[codec_name] = final_path_str
-                                    
-                                    # Set as primary if first successful one
-                                    if not primary_file_path:
-                                        primary_file_path = final_path_str
-                                        # Update download_item to point to REAL final path for metadata extraction
-                                        download_item.final_path = final_path_str
-                                else:
-                                    print(f"[DEBUG] File exists and overwrite=False: {final_dest}", flush=True)
-                                    codec_paths_map[codec_name] = str(final_dest)
-                                    if not primary_file_path:
-                                        primary_file_path = str(final_dest)
-                                        download_item.final_path = str(final_dest)
-                                        
-                        except Exception as dl_err:
-                            print(f"[ERROR] Failed to download {codec_name} for track {i+1}: {dl_err}", flush=True)
-                            # Continue to next codec
+                    # Broadcast download_failed to WebSocket clients
+                    asyncio.create_task(broadcast_ws_event("download_failed", {
+                        "track_id": track_info["track_id"],
+                        "title": track_info["title"],
+                        "artist": track_info["artist"],
+                        "album": track_info["album"],
+                        "error": "Download returned no result",
+                        "current": i + 1,
+                        "total": total_tracks,
+                    }))
                     
-                    if primary_file_path:
-                        file_path = primary_file_path
-                        result = primary_download_item # Use original item (updated) for subsequent logic
+            except Exception as e:
+                error_str = str(e)
+                print(f"[DEBUG] Track {i + 1} error: {e}", flush=True)
+                
+                # Special handling for "MediaFileExists" - treat as success
+                # Extract path from error message and use existing file
+                if "already exists at path:" in error_str:
+                    try:
+                        # Extract file path from error message
+                        file_path = error_str.split("already exists at path:")[-1].strip()
+                        print(f"[DEBUG] File exists, treating as success: {file_path}", flush=True)
                         
-                        # Extract metadata from downloaded file (using the primary file)
-                        try:
-                            metadata = extract_metadata_from_file(file_path)
-                        except Exception as e:
-                            print(f"Metadata extraction failed: {e}")
-                            metadata = {}
-
-                        # ... (Rest of logic continues using 'file_path' variable)
+                        # Extract metadata from download_item (API data, not file tags)
+                        metadata = extract_metadata_from_download_item(download_item, file_path)
                         
-                        # Extract Apple Music IDs from download_item
+                        # Extract Apple Music IDs from download_item (we still have it from the loop)
                         apple_ids = extract_apple_music_ids_from_item(download_item)
                         metadata.update(apple_ids)
                         
-                        # Merge album-level metadata from API
                         metadata.update(album_metadata)
                         
-                        # Find lyrics file if it exists (in final output path)
+                        # Find associated files
                         lyrics_path = None
-                        lyrics_type = None
-                        
-                        # Map lyrics format from request
-                        lyric_target_exists = False
                         if request.lyrics_format != "none":
-                            # Check for lyrics file with same base name as the primary file
-                            # Since we renamed the audio file, the lyrics might not match if they were moved blindly
-                            # But we moved extras.
-                            # Standard gamdl naming for lyrics matches audio filename base.
-                            # Since we renamed audio to "Title [Codec]", we need to check if lyrics were renamed?
-                            # No, we moved extras "as is" or with original name.
-                            # If we moved "Title.lrc", it won't match "Title [Codec].m4a".
-                            # This is a small issue. We should rename lyrics to match the primary audio file?
-                            # Or just look for "Title.lrc".
-                            pass
-                            
-                        # Re-implement lyrics discovery based on Primary File Path stem
-                        # If primary file is "Title [Codec].m4a", we look for "Title [Codec].lrc"?
-                        # Or just "Title.lrc"?
-                        # The code below uses Path(file_path).with_suffix().
-                        # So it looks for "Title [Codec].lrc".
-                        # But we saved "Title.lrc" (probably).
-                        
-                        # We should rename the lyrics file to match the primary audio file if we want them associated.
-                        
                             potential_lrc = Path(file_path).with_suffix(f".{request.lyrics_format}")
                             if potential_lrc.exists():
                                 lyrics_path = str(potential_lrc)
-                            
-                            # Try to get word-by-word lyrics if we have the song's Apple Music ID
-                            # Note: extract_apple_music_ids_from_item returns 'appleMusicId' for songs
-                            song_apple_id = apple_ids.get("appleMusicId") or metadata.get("appleMusicId")
-                            print(f"[LYRICS] song_apple_id={song_apple_id}, lyrics_format={request.lyrics_format}", flush=True)
-                            if song_apple_id and request.lyrics_format == "ttml":
-                                try:
-                                    # Get translation languages from settings
-                                    translation_langs = getattr(request, 'lyrics_translation_langs', '').split(',')
-                                    translation_langs = [l.strip() for l in translation_langs if l.strip()]
-                                    
-                                    # Fetch all lyrics variants using the new comprehensive function
-                                    lyrics_variants = await fetch_all_lyrics_variants(
-                                        apple_music_api,
-                                        song_apple_id,
-                                        translation_langs,
-                                        storefront=apple_music_api.storefront
-                                    )
-                                    
-                                    # Store audioLocale
-                                    if lyrics_variants["audio_locale"]:
-                                        metadata["audioLocale"] = lyrics_variants["audio_locale"]
-                                    
-                                    # Save original lyrics
-                                    if lyrics_variants["original"] and lyrics_variants["original"].get("ttml"):
-                                        ttml_path = Path(file_path).with_suffix(".ttml")
-                                        ttml_path.write_text(lyrics_variants["original"]["ttml"], encoding="utf-8")
-                                        lyrics_path = str(ttml_path)
-                                        metadata["lyricsHasWordSync"] = lyrics_variants["original"].get("has_word_timing", False)
-                                        print(f"[LYRICS] Saved original lyrics to {lyrics_path}", flush=True)
-                                    
-                                    # Save translations as separate files and track paths
-                                    translation_paths = {}
-                                    for lang, ttml_content in lyrics_variants["translations"].items():
-                                        trans_path = Path(file_path).with_suffix(f".{lang}.ttml")
-                                        trans_path.write_text(ttml_content, encoding="utf-8")
-                                        translation_paths[lang] = str(trans_path)
-                                        print(f"[LYRICS] Saved {lang} translation to {trans_path}", flush=True)
-                                    
-                                    if translation_paths:
-                                        metadata["lyricsTranslations"] = json.dumps(translation_paths)
-                                    
-                                    # Save romanization (if separate file, not embedded)
-                                    if lyrics_variants["romanization"] and lyrics_variants["romanization"] != "embedded":
-                                        script = lyrics_variants["romanization_script"]
-                                        roman_path = Path(file_path).with_suffix(f".{script}.ttml")
-                                        roman_path.write_text(lyrics_variants["romanization"], encoding="utf-8")
-                                        metadata["lyricsPronunciations"] = json.dumps({script: str(roman_path)})
-                                        print(f"[LYRICS] Saved romanization ({script}) to {roman_path}", flush=True)
-                                    elif lyrics_variants["romanization"] == "embedded":
-                                        # Romanization is embedded in original TTML, just record the script
-                                        script = lyrics_variants["romanization_script"]
-                                        metadata["lyricsPronunciations"] = json.dumps({script: "embedded"})
-                                        print(f"[LYRICS] Romanization ({script}) is embedded in original", flush=True)
-                                    
-                                except Exception as lyrics_err:
-                                    import traceback
-                                    print(f"[LYRICS] Error fetching lyrics: {lyrics_err}", flush=True)
-                                    traceback.print_exc()
                         
-                        # Find lyrics file - heuristic: check for .lrc with same base name (ignoring [Codec])
-                        # or just check specific patterns since we moved them "as is"
-                        lyrics_path = None
-                        if request.lyrics_format != "none":
-                            # Try to find matching lyrics file
-                            # Since we renamed audio to "Title [Codec].m4a", the lyrics are likely "Title.lrc"
-                            # We can try to guess "Title.lrc" by stripping " [Codec]"
-                            # But better: just pass the lyrics path if we found it in the loop?
-                            # For simplicity, let's look for the .lrc file corresponding to the *renamed* file first (unlikely)
-                            # then the base name.
-                            
-                            base_stem = Path(file_path).stem
-                            # Try stripping known codec suffixes
-                            for c_name in codec_list:
-                                if f" [{c_name}]" in base_stem:
-                                    base_stem = base_stem.replace(f" [{c_name}]", "")
-                            
-                            potential_lrc_base = Path(file_path).parent / f"{base_stem}.{request.lyrics_format}"
-                            if potential_lrc_base.exists():
-                                lyrics_path = str(potential_lrc_base)
-                            else:
-                                # Try exact match (rare if we renamed)
-                                potential_lrc_exact = Path(file_path).with_suffix(f".{request.lyrics_format}")
-                                if potential_lrc_exact.exists():
-                                    lyrics_path = str(potential_lrc_exact)
-                        
-                        # Find cover file
                         cover_path = None
                         if request.save_cover:
                             potential_cover = Path(file_path).parent / "cover.jpg"
                             if potential_cover.exists():
                                 cover_path = str(potential_cover)
-
+                        
                         yield {
                             "event": "track_complete",
                             "data": json.dumps({
-                                "codec_paths": codec_paths_map, # Include the map of all downloaded files
-                                "codecPaths": codec_paths_map,  # Redundant key for TS compatibility to ensure frontend receives the full map
                                 "filePath": file_path,
-                                # removed duplicate codecPaths key that was overwriting the map
+                                "codecPaths": {primary_codec: file_path},  # Store codec -> path mapping
                                 "lyricsPath": lyrics_path,
                                 "coverPath": cover_path,
                                 "metadata": metadata,
@@ -3200,116 +3576,91 @@ async def start_download(request: DownloadRequest):
                                 "total": total_tracks,
                             }),
                         }
-                        completed += 1
-                    else:
-                        yield {
-                            "event": "track_error",
-                            "data": json.dumps({
-                                "current": i + 1,
-                                "total": total_tracks,
-                                "message": "Download returned no result",
-                            }),
-                        }
                         
-                except Exception as e:
-                    error_str = str(e)
-                    print(f"[DEBUG] Track {i + 1} error: {e}", flush=True)
-                    
-                    # Special handling for "MediaFileExists" - treat as success
-                    # Extract path from error message and use existing file
-                    if "already exists at path:" in error_str:
-                        try:
-                            # Extract file path from error message
-                            file_path = error_str.split("already exists at path:")[-1].strip()
-                            print(f"[DEBUG] File exists, treating as success: {file_path}", flush=True)
-                            
-                            # Extract metadata from existing file
-                            metadata = extract_metadata_from_file(file_path)
-                            
-                            # Extract Apple Music IDs from download_item (we still have it from the loop)
-                            apple_ids = extract_apple_music_ids_from_item(download_item)
-                            metadata.update(apple_ids)
-                            
-                            metadata.update(album_metadata)
-                            
-                            # Find associated files
-                            lyrics_path = None
-                            if request.lyrics_format != "none":
-                                potential_lrc = Path(file_path).with_suffix(f".{request.lyrics_format}")
-                                if potential_lrc.exists():
-                                    lyrics_path = str(potential_lrc)
-                            
-                            cover_path = None
-                            if request.save_cover:
-                                potential_cover = Path(file_path).parent / "cover.jpg"
-                                if potential_cover.exists():
-                                    cover_path = str(potential_cover)
-                            
-                            yield {
-                                "event": "track_complete",
-                                "data": json.dumps({
-                                    "filePath": file_path,
-                                    "codecPaths": {primary_codec: file_path},  # Store codec -> path mapping
-                                    "lyricsPath": lyrics_path,
-                                    "coverPath": cover_path,
-                                    "metadata": metadata,
-                                    "current": i + 1,
-                                    "total": total_tracks,
-                                }),
-                            }
-                            completed += 1
-                            continue
-                        except Exception as extract_err:
-                            print(f"[DEBUG] Failed to extract metadata from existing file: {extract_err}", flush=True)
-                    
-                    import traceback
-                    traceback.print_exc()
-                    yield {
-                        "event": "track_error",
-                        "data": json.dumps({
+                        # Broadcast download_skipped to WebSocket clients (file already exists)
+                        asyncio.create_task(broadcast_ws_event("download_skipped", {
+                            "track_id": track_info["track_id"] if 'track_info' in dir() else None,
+                            "title": metadata.get("title", "Unknown"),
+                            "artist": metadata.get("artist", "Unknown Artist"),
+                            "album": metadata.get("album", "Unknown Album"),
+                            "file_path": file_path,
+                            "reason": "File already exists",
                             "current": i + 1,
                             "total": total_tracks,
-                            "message": error_str,
-                        }),
-                    }
-            
-            # Check for M3U8 playlist file
-            if url_info.type == "playlist" if hasattr(url_info, "type") else False:
-                # gamdl generates M3U8 with --save-playlist flag
-                # The path typically follows the playlist name
+                        }))
+                        
+                        completed += 1
+                        continue
+                    except Exception as extract_err:
+                        print(f"[DEBUG] Failed to extract metadata from existing file: {extract_err}", flush=True)
+                
+                import traceback
+                traceback.print_exc()
                 yield {
-                    "event": "playlist_complete",
+                    "event": "track_error",
                     "data": json.dumps({
-                        "completed_tracks": completed,
-                        "total_tracks": total_tracks,
+                        "current": i + 1,
+                        "total": total_tracks,
+                        "message": error_str,
                     }),
                 }
-            
-            yield {
-                "event": "complete",
-                "data": json.dumps({
-                    "status": "success",
-                    "completed": completed,
+                
+                # Broadcast download_failed to WebSocket clients
+                asyncio.create_task(broadcast_ws_event("download_failed", {
+                    "track_id": track_info["track_id"] if 'track_info' in dir() else None,
+                    "title": track_info["title"] if 'track_info' in dir() else "Unknown",
+                    "artist": track_info["artist"] if 'track_info' in dir() else "Unknown Artist",
+                    "album": track_info["album"] if 'track_info' in dir() else "Unknown Album",
+                    "error": error_str,
+                    "current": i + 1,
                     "total": total_tracks,
+                }))
+        
+        # Check for M3U8 playlist file
+        if url_info.type == "playlist" if hasattr(url_info, "type") else False:
+            # gamdl generates M3U8 with --save-playlist flag
+            # The path typically follows the playlist name
+            yield {
+                "event": "playlist_complete",
+                "data": json.dumps({
+                    "completed_tracks": completed,
+                    "total_tracks": total_tracks,
                 }),
             }
-            
-        except Exception as e:
-            traceback.print_exc()
-            yield {
-                "event": "error",
-                "data": json.dumps({"message": str(e)}),
-            }
-        finally:
-            # Clean up temporary cookies file
-            if cookies_path and os.path.exists(cookies_path):
-                try:
-                    os.unlink(cookies_path)
-                except Exception:
-                    pass
-    
-    print("[DEBUG] Creating EventSourceResponse...", flush=True)
-    return EventSourceResponse(event_generator())
+        
+        yield {
+            "event": "complete",
+            "data": json.dumps({
+                "status": "success",
+                "completed": completed,
+                "total": total_tracks,
+            }),
+        }
+        
+        # Broadcast queue_update to WebSocket clients with final stats
+        skipped = total_tracks - completed  # Approximate - includes both skipped and failed
+        asyncio.create_task(broadcast_ws_event("queue_update", {
+            "queued": 0,
+            "completed": completed,
+            "skipped": skipped,
+            "failed": 0,  # We don't track separately, so use 0
+            "total_bytes": 0,  # Would need to sum file sizes
+        }))
+        
+    except Exception as e:
+        traceback.print_exc()
+        yield {
+            "event": "error",
+            "data": json.dumps({"message": str(e)}),
+        }
+    finally:
+        # Clean up temporary cookies file
+        if cookies_path and os.path.exists(cookies_path):
+            try:
+                os.unlink(cookies_path)
+            except Exception:
+                pass
+
 
 
 # --- Wrapper Auth Endpoints ---

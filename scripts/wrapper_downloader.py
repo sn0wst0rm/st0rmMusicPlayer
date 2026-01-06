@@ -8,15 +8,17 @@ and decrypting them using amdecrypt.py (FairPlay via wrapper TCP).
 import asyncio
 import logging
 import tempfile
+import shutil
 from pathlib import Path
 from typing import Optional
 
 import httpx
 import m3u8
-from gamdl.interface.enums import SongCodec
+from gamdl.interface.enums import SongCodec, SyncedLyricsFormat
 
 from wrapper_client import WrapperClient
 import amdecrypt
+from mutagen.mp4 import MP4, MP4Cover
 
 logger = logging.getLogger(__name__)
 
@@ -38,31 +40,106 @@ CODEC_STREAM_PATTERNS = {
 class WrapperSongDownloader:
     """Downloads and decrypts ALAC/Atmos/AAC tracks using the wrapper service."""
     
-    def __init__(self, base_downloader, interface, codec: SongCodec = SongCodec.ALAC):
+    def __init__(self, base_downloader, interface, codec: SongCodec = SongCodec.ALAC, synced_lyrics_format: SyncedLyricsFormat = SyncedLyricsFormat.LRC, no_synced_lyrics: bool = False):
         self.base_downloader = base_downloader
         self.interface = interface
         self.codec = codec
         self.wrapper_client = WrapperClient()
         self.wrapper_ip = "127.0.0.1:10020"
-        # Compatibility with gamdl's AppleMusicDownloader expectations
-        self.no_synced_lyrics = True       # Lyrics handled separately via API
-        self.synced_lyrics_only = False    # Always download full tracks
-        self.use_wrapper = True            # We always use wrapper for decryption, not lyrics-only
+        self.synced_lyrics_format = synced_lyrics_format
+        self.no_synced_lyrics = no_synced_lyrics
+        self.synced_lyrics_only = False
+        self.use_wrapper = True
 
-    def write_synced_lyrics(self, synced_lyrics: str, lyrics_synced_path: str):
-        """No-op: lyrics are handled separately via the normal API."""
-        pass
+    def write_synced_lyrics(self, synced_lyrics, lyrics_synced_path: Path):
+        """Write lyrics to file."""
+        if not synced_lyrics:
+            return
+        
+        try:
+            # Attempt to extract content if it's an object
+            content = str(synced_lyrics)
+            if hasattr(synced_lyrics, 'as_lrc') and self.synced_lyrics_format == SyncedLyricsFormat.LRC:
+                content = synced_lyrics.as_lrc()
+            elif hasattr(synced_lyrics, 'as_ttml'):
+                content = synced_lyrics.as_ttml()
+                
+            with open(lyrics_synced_path, "w", encoding="utf-8") as f:
+                f.write(content)
+        except Exception as e:
+            logger.error(f"Failed to write lyrics file: {e}")
+            
+    def apply_tags(self, path: Path, download_item):
+        """Apply metadata tags to the downloaded file."""
+        if not path.exists():
+            return
+        
+        try:
+            # metadata is usually in download_item.media_metadata
+            tags = getattr(download_item, "media_metadata", {})
+            if not tags: 
+                logger.warning("No metadata found in download_item")
+                return
+
+            video = MP4(path)
+            
+            # Basic Tags
+            if tags.get("title"):
+                video["\xa9nam"] = tags["title"]
+            if tags.get("artist"):
+                video["\xa9ART"] = tags["artist"]
+            if tags.get("album_artist"):
+                video["aART"] = tags["album_artist"]
+            if tags.get("album"):
+                video["\xa9alb"] = tags["album"]
+            if tags.get("release_year"):
+                video["\xa9day"] = str(tags["release_year"])
+            if tags.get("genre"):
+                video["\xa9gen"] = tags["genre"]
+            if tags.get("composer"):
+                video["\xa9wrt"] = tags["composer"]
+            if tags.get("copyright"):
+                video["cprt"] = tags["copyright"]
+            if tags.get("grouping"): # Work Name / Grouping
+                video["\xa9grp"] = tags["grouping"]
+            if tags.get("description"):
+                video["desc"] = tags["description"]
+            
+            # Track/Disc
+            try:
+                trkn = (int(tags.get("track_number", 0)), int(tags.get("track_count", 0)))
+                if trkn[0] > 0:
+                    video["trkn"] = [trkn]
+            except: pass
+                
+            try:
+                disk = (int(tags.get("disc_number", 0)), int(tags.get("disc_count", 0)))
+                if disk[0] > 0:
+                    video["disk"] = [disk]
+            except: pass
+
+            # Cover Art (Attempt to find it if gamdl stored it)
+            # download_item might NOT have cover_path if it's set later in gamdl logic.
+            # But the 'temp_path' or similar might exist.
+            # We skip cover for now as it's complex to locate without explicit path passing.
+            
+            video.save()
+            logger.info(f"Applied metadata tags to {path}")
+        except Exception as e:
+            logger.error(f"Failed to apply tags: {e}")
 
     def is_wrapper_available(self) -> bool:
         """Check if wrapper service is available."""
         return self.wrapper_client.health_check()
 
-    async def download(self, download_item) -> Optional[Path]:
+    async def download(self, download_item, progress_callback=None) -> Optional[Path]:
         """
         Main download entry point.
         
         Args:
             download_item: The download item from gamdl with metadata and tags
+            progress_callback: Optional callback(stage, current, total, bytes, speed) for progress tracking
+                              stage is 'download' or 'decrypt'
             
         Returns:
             Path to the downloaded file, or None on failure
@@ -124,7 +201,7 @@ class WrapperSongDownloader:
         if not seg_url.startswith("http"):
             seg_url = media_url.rsplit("/", 1)[0] + "/" + seg_url
         
-        encrypted_data = await self._download_file_with_retry(seg_url)
+        encrypted_data = await self._download_file_with_retry(seg_url, progress_callback)
         if not encrypted_data:
             raise Exception("Failed to download encrypted file")
         
@@ -147,6 +224,12 @@ class WrapperSongDownloader:
         
         # 9. Decrypt using amdecrypt
         logger.info("Decrypting with amdecrypt...")
+        
+        # Create decrypt progress callback wrapper
+        def decrypt_progress(current, total, bytes_done, speed):
+            if progress_callback:
+                progress_callback('decrypt', current, total, bytes_done, speed)
+        
         await amdecrypt.decrypt_file(
             wrapper_ip=self.wrapper_ip,
             mp4decrypt_path="mp4decrypt",
@@ -154,6 +237,7 @@ class WrapperSongDownloader:
             fairplay_key=fairplay_key,
             input_path=str(encrypted_path),
             output_path=temp_path,
+            progress_callback=decrypt_progress,
         )
         
         # Cleanup encrypted temp file
@@ -162,16 +246,78 @@ class WrapperSongDownloader:
         logger.info(f"Decryption complete: {temp_path}")
 
         # 10. Finalize (Tags, Cover, Move)
+        media_tags = download_item.media_tags
+        playlist_tags = download_item.playlist_tags
+        
+        # Defensive check - media_tags can be None if stream_info was not fetched properly
+        if media_tags is None:
+            logger.warning("media_tags is None - attempting to use media_metadata for tags")
+            # Try to construct minimal tags from media_metadata
+            # media_metadata is Apple Music API response with 'id' and 'attributes' keys
+            raw_metadata = download_item.media_metadata or {}
+            # Extract the nested attributes dict
+            attrs = raw_metadata.get('attributes', {}) if isinstance(raw_metadata, dict) else {}
+            
+            # Create a minimal Tags-like object using gamdl's dataclass if available
+            from dataclasses import dataclass
+            @dataclass
+            class MinimalTags:
+                album: str = None
+                album_artist: str = None  # Required by gamdl
+                album_sort: str = None
+                artist: str = None
+                artist_sort: str = None
+                composer: str = None
+                composer_sort: str = None
+                copyright: str = None
+                disc: int = 1
+                disc_total: int = 1
+                genre: str = None
+                lyrics: str = None
+                rating: int = 0
+                release_date: str = None
+                title: str = None
+                title_sort: str = None
+                track: int = 1
+                track_total: int = 1
+                # Additional required fields
+                compilation: bool = False
+                gapless: bool = False
+                media_type: int = 1  # 1 = Music
+            
+            # Map Apple Music API field names to our Tags fields
+            media_tags = MinimalTags(
+                album=attrs.get("albumName"),
+                album_artist=attrs.get("artistName"),  # Album artist = track artist if not specified
+                artist=attrs.get("artistName"),
+                title=attrs.get("name"),
+                genre=attrs.get("genreNames", [None])[0] if attrs.get("genreNames") else None,
+                composer=attrs.get("composerName"),
+                copyright=attrs.get("copyright"),
+                track=attrs.get("trackNumber", 1),
+                track_total=attrs.get("trackCount", 1),
+                disc=attrs.get("discNumber", 1),
+                disc_total=attrs.get("discCount", 1),
+                # Note: release_date removed as gamdl Tags doesn't accept it
+            )
+            logger.info(f"Created MinimalTags: title={media_tags.title}, artist={media_tags.artist}, album={media_tags.album}")
+        
         final_path = self.base_downloader.get_final_path(
-            download_item.media_tags,
+            media_tags,
             ".m4a",
-            download_item.playlist_tags
+            playlist_tags
         )
         
         # Apply tags
         cover_url = self.base_downloader.get_cover_url_template(download_item.media_metadata)
-        await self.base_downloader.apply_tags(Path(temp_path), download_item.media_tags, cover_url)
+        await self.base_downloader.apply_tags(Path(temp_path), media_tags, cover_url)
         
+        # NOTE: Lyrics are NOT downloaded here because:
+        # 1. gamdl's interface.get_lyrics() only supports line-by-line lyrics
+        # 2. gamdl_service.py handles lyrics with fetch_all_lyrics_variants() 
+        #    which supports syllable-synced (word-by-word) lyrics
+        # The gamdl_service will download syllable lyrics after this download completes.
+
         # Move to final location
         self.base_downloader.move_to_final_path(temp_path, final_path)
         
@@ -239,14 +385,44 @@ class WrapperSongDownloader:
         
         return None
 
-    async def _download_file_with_retry(self, url: str) -> Optional[bytes]:
-        """Download a file with retry logic."""
+    async def _download_file_with_retry(self, url: str, progress_callback=None) -> Optional[bytes]:
+        """Download a file with retry logic and progress tracking."""
+        import time
+        
         for attempt in range(MAX_RETRIES):
             try:
                 async with httpx.AsyncClient(timeout=180.0) as client:
-                    resp = await client.get(url)
-                    resp.raise_for_status()
-                    return resp.content
+                    # Use streaming to track progress
+                    async with client.stream("GET", url) as resp:
+                        resp.raise_for_status()
+                        
+                        # Try to get content length for progress tracking
+                        total_size = int(resp.headers.get("content-length", 0))
+                        
+                        chunks = []
+                        bytes_downloaded = 0
+                        start_time = time.time()
+                        last_progress_time = start_time
+                        
+                        async for chunk in resp.aiter_bytes(chunk_size=65536):
+                            chunks.append(chunk)
+                            bytes_downloaded += len(chunk)
+                            
+                            # Call progress callback every 0.5s
+                            now = time.time()
+                            if progress_callback and (now - last_progress_time > 0.3):
+                                elapsed = now - start_time
+                                speed = bytes_downloaded / elapsed if elapsed > 0 else 0
+                                progress_callback('download', bytes_downloaded, total_size, bytes_downloaded, speed)
+                                last_progress_time = now
+                        
+                        # Final progress update
+                        if progress_callback:
+                            elapsed = time.time() - start_time
+                            speed = bytes_downloaded / elapsed if elapsed > 0 else 0
+                            progress_callback('download', bytes_downloaded, total_size, bytes_downloaded, speed)
+                        
+                        return b"".join(chunks)
             except Exception as e:
                 logger.warning(f"Download attempt {attempt + 1} failed: {e}")
                 if attempt < MAX_RETRIES - 1:
@@ -362,6 +538,10 @@ async def download_track_with_wrapper(
     )
     
     Path(encrypted_path).unlink(missing_ok=True)
+    
+    # 8. Apply Tags
+    self.apply_tags(Path(output_path), download_item)
+    
     logger.info(f"Downloaded: {output_path}")
     return output_path
 
