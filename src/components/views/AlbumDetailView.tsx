@@ -96,18 +96,33 @@ export function AlbumDetailView({ album, onBack, onArtistClick }: AlbumDetailVie
                         {!isCoverLoaded && (
                             <Skeleton className="absolute inset-0 w-full h-full bg-primary/10" />
                         )}
-                        <img
-                            src={album.tracks[0] ? `/api/cover/${album.tracks[0].id}?size=large` : ""}
-                            alt={album.title}
-                            className={cn(
-                                "absolute inset-0 w-full h-full object-cover transition-opacity duration-300",
-                                isCoverLoaded ? "opacity-100" : "opacity-0"
-                            )}
-                            onLoad={() => setIsCoverLoaded(true)}
-                            onError={(e) => {
-                                e.currentTarget.style.display = 'none'
-                            }}
-                        />
+                        {album.animatedCoverPath ? (
+                            <img
+                                src={`/api/animated-cover/${album.id}?size=large`}
+                                alt={album.title}
+                                className={cn(
+                                    "absolute inset-0 w-full h-full object-cover transition-opacity duration-300",
+                                    isCoverLoaded ? "opacity-100" : "opacity-0"
+                                )}
+                                onLoad={() => setIsCoverLoaded(true)}
+                                onError={(e) => {
+                                    e.currentTarget.style.display = 'none'
+                                }}
+                            />
+                        ) : (
+                            <img
+                                src={album.tracks[0] ? `/api/cover/${album.tracks[0].id}?size=large` : ""}
+                                alt={album.title}
+                                className={cn(
+                                    "absolute inset-0 w-full h-full object-cover transition-opacity duration-300",
+                                    isCoverLoaded ? "opacity-100" : "opacity-0"
+                                )}
+                                onLoad={() => setIsCoverLoaded(true)}
+                                onError={(e) => {
+                                    e.currentTarget.style.display = 'none'
+                                }}
+                            />
+                        )}
                         {/* Fallback */}
                         <div className="absolute inset-0 flex items-center justify-center bg-gradient-to-br from-gray-200 to-gray-300 dark:from-gray-800 dark:to-gray-900 text-muted-foreground font-bold text-6xl -z-10">
                             {album.title.charAt(0)}

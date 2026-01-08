@@ -573,15 +573,11 @@ export function Player() {
                 <div className="flex items-center gap-4 w-1/3 min-w-0">
                     <div className="h-12 w-12 bg-secondary rounded-md shadow-sm overflow-hidden flex-shrink-0 relative group">
                         {!isCoverLoaded && <Skeleton className="absolute inset-0 w-full h-full bg-primary/10" />}
-                        <img
-                            src={currentTrack ? `/api/cover/${currentTrack.id}?size=small` : ""}
-                            alt={currentTrack?.title || "Cover"}
-                            className={cn("h-full w-full object-cover transition-opacity duration-300", !isCoverLoaded && "opacity-0")}
-                            onLoad={() => setIsCoverLoaded(true)}
-                            onError={(e) => {
-                                e.currentTarget.style.display = "none";
-                                // setIsCoverLoaded(true); // Keep skeleton on error as requested
-                            }}
+                        <PlayerCoverImage
+                            currentTrack={currentTrack}
+                            library={library}
+                            isCoverLoaded={isCoverLoaded}
+                            setIsCoverLoaded={setIsCoverLoaded}
                         />
                         {!currentTrack && (
                             <div className="absolute inset-0 flex items-center justify-center bg-gray-200 dark:bg-gray-800 text-xs text-muted-foreground">
@@ -703,4 +699,79 @@ function formatTime(seconds: number) {
     const mins = Math.floor(seconds / 60)
     const secs = Math.floor(seconds % 60)
     return `${mins}:${secs.toString().padStart(2, "0")}`
+}
+
+function PlayerCoverImage({ currentTrack, library, isCoverLoaded, setIsCoverLoaded }: {
+    currentTrack: any,
+    library: any[],
+    isCoverLoaded: boolean,
+    setIsCoverLoaded: (loaded: boolean) => void
+}) {
+    const [activeSrc, setActiveSrc] = React.useState<string>("");
+
+    // Compute paths
+    const staticCoverPath = currentTrack?.id ? `/api/cover/${currentTrack.id}?size=small` : "";
+
+    const animatedCoverPath = React.useMemo(() => {
+        if (!currentTrack?.albumId) return null;
+        for (const artist of library) {
+            const album = artist.albums.find((a: any) => a.id === currentTrack.albumId);
+            if (album?.animatedCoverPath) {
+                return album.animatedCoverPath;
+            }
+        }
+        return null;
+    }, [library, currentTrack?.albumId]);
+
+    // Effect to handle loading strategy
+    React.useEffect(() => {
+        if (!currentTrack) {
+            setActiveSrc("");
+            return;
+        }
+
+        // Always start/reset to static cover immediately when track changes
+        // This ensures prompt feedback
+        setActiveSrc(staticCoverPath);
+
+        // If we have an animated path, try to pre-load it
+        if (animatedCoverPath && currentTrack.albumId) {
+            const animatedSrc = `/api/animated-cover/${currentTrack.albumId}?size=small`;
+
+            const img = new Image();
+            img.src = animatedSrc;
+            img.onload = () => {
+                // Only switch if this is still the relevant track/cover
+                // (Closure captures the scope, but good to be reactive if we used extensive refs, 
+                // but here effectively if the component unmounts/updates dependencies this effect cleans up implicitely by being superseded)
+                // Actually to be safe we can check if we are still mounted or just rely on react state update stability.
+                // React state updates on unmounted components are warned but generally safe-ish, 
+                // but let's assume standard behavior.
+                setActiveSrc(animatedSrc);
+                console.log('[PlayerCoverImage] Switched to animated cover');
+            };
+            img.onerror = () => {
+                console.warn('[PlayerCoverImage] Failed to load animated cover, staying on static');
+            };
+        }
+    }, [currentTrack?.id, animatedCoverPath, staticCoverPath]);
+
+    return (
+        <img
+            // Key changes only when track changes, not when upgrading to animated
+            // This allows the browser to potentially crossfade or just replace content smoothly
+            // actually, changing src without key change is standard.
+            // But we might want to trigger fade loop?
+            // Simple src swap is fine for now.
+            key={currentTrack?.id || "empty"}
+            src={activeSrc || staticCoverPath} // Fallback to static if active is empty
+            alt={currentTrack?.title || "Cover"}
+            className={cn("h-full w-full object-cover transition-opacity duration-300", !isCoverLoaded && "opacity-0")}
+            onLoad={() => setIsCoverLoaded(true)}
+            onError={(e) => {
+                // Ultimate fallback if even static fails
+                e.currentTarget.style.display = "none";
+            }}
+        />
+    );
 }

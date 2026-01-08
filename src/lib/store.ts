@@ -27,6 +27,7 @@ export interface Track {
     }
     album?: {
         title: string
+        animatedCoverPath?: string | null
     }
 }
 
@@ -53,6 +54,7 @@ export interface SelectedAlbum {
     genre?: string
     releaseDate?: Date | string
     recordLabel?: string
+    animatedCoverPath?: string
 }
 
 export interface DownloadItem {

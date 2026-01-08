@@ -10,6 +10,7 @@ export interface Album {
     genre?: string | null
     releaseDate?: Date | string | null
     recordLabel?: string | null
+    animatedCoverPath?: string | null
 }
 
 export interface Artist {

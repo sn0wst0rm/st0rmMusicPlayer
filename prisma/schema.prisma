@@ -19,34 +19,36 @@ model Artist {
 }
 
 model Album {
-    id                  String    @id @default(uuid())
-    title               String
-    artistId            String
-    artist              Artist    @relation(fields: [artistId], references: [id])
-    coverSmallPath      String? // ~96px
-    coverMediumPath     String? // ~512px
-    coverLargePath      String? // Original/Full
+    id                     String    @id @default(uuid())
+    title                  String
+    artistId               String
+    artist                 Artist    @relation(fields: [artistId], references: [id])
+    coverSmallPath         String? // ~96px
+    coverMediumPath        String? // ~512px
+    coverLargePath         String? // Original/Full
+    animatedCoverPath      String? // Full quality motion artwork MP4
+    animatedCoverSmallPath String? // Web-optimized motion artwork for player
     // Metadata from gamdl
-    appleMusicId        String?   @unique // Apple Music album ID
-    genre               String? // Primary genre
-    releaseDate         DateTime? // Release date
-    copyright           String? // Copyright info
-    trackTotal          Int? // Total tracks in album
-    discTotal           Int? // Total discs
-    isCompilation       Boolean   @default(false)
-    sortTitle           String? // For proper alphabetical sorting
+    appleMusicId           String?   @unique // Apple Music album ID
+    genre                  String? // Primary genre
+    releaseDate            DateTime? // Release date
+    copyright              String? // Copyright info
+    trackTotal             Int? // Total tracks in album
+    discTotal              Int? // Total discs
+    isCompilation          Boolean   @default(false)
+    sortTitle              String? // For proper alphabetical sorting
     // Extended Apple Music metadata
-    description         String? // Editorial notes / description
-    recordLabel         String? // Record label name
-    upc                 String? // Universal Product Code
-    isSingle            Boolean   @default(false)
-    isMasteredForItunes Boolean   @default(false)
+    description            String? // Editorial notes / description
+    recordLabel            String? // Record label name
+    upc                    String? // Universal Product Code
+    isSingle               Boolean   @default(false)
+    isMasteredForItunes    Boolean   @default(false)
     // Artwork colors for theming
-    artworkBgColor      String? // Background color (hex without #)
-    artworkTextColor1   String? // Primary text color
-    artworkTextColor2   String? // Secondary text color
-    artworkTextColor3   String? // Tertiary text color
-    artworkTextColor4   String? // Quaternary text color
+    artworkBgColor         String? // Background color (hex without #)
+    artworkTextColor1      String? // Primary text color
+    artworkTextColor2      String? // Secondary text color
+    artworkTextColor3      String? // Tertiary text color
+    artworkTextColor4      String? // Quaternary text color
 
     createdAt DateTime @default(now())
     updatedAt DateTime @updatedAt
