@@ -58,6 +58,361 @@ def is_wrapper_required(codec: str) -> bool:
     return codec.lower() not in GAMDL_NATIVE_CODECS
 
 
+import subprocess
+import re
+
+
+def get_animated_cover_url(album_attrs: dict) -> str | None:
+    """
+    Extract the best quality animated cover (motion artwork) URL from album attributes.
+    Returns the HLS m3u8 URL if available, None otherwise.
+    """
+    try:
+        editorial_video = album_attrs.get("editorialVideo", {})
+        if not editorial_video:
+            print(f"[ANIMATED COVER] No editorialVideo field in album attributes", flush=True)
+            return None
+        
+        print(f"[ANIMATED COVER] Found editorialVideo with keys: {list(editorial_video.keys())}", flush=True)
+        
+        # Try different motion artwork variants in order of preference
+        # motionDetailSquare is typically used for album art
+        variants = [
+            "motionDetailSquare",
+            "motionSquareVideo1x1",
+            "motionDetailTall",
+            "motionTallVideo3x4",
+        ]
+        
+        for variant in variants:
+            video_data = editorial_video.get(variant, {})
+            video_url = video_data.get("video")
+            if video_url:
+                print(f"[ANIMATED COVER] Found {variant}: {video_url[:100]}...", flush=True)
+                return video_url
+        
+        print(f"[ANIMATED COVER] No supported motion artwork variant found", flush=True)
+        return None
+    except Exception as e:
+        print(f"[ANIMATED COVER] Error extracting URL: {e}", flush=True)
+        return None
+
+
+async def download_animated_cover(
+    m3u8_url: str,
+    output_dir: Path,
+    album_id: str
+) -> dict | None:
+    """
+    Download animated album cover from HLS stream and convert to MP4.
+    Creates both full quality and web-optimized versions.
+    Skips if files already exist.
+    
+    Returns dict with paths: {"full": path, "small": path} or None on failure.
+    """
+    try:
+        full_path = output_dir / "cover-animated.gif"
+        small_path = output_dir / "cover-animated-small.gif"
+        
+        # Also check for old MP4 versions
+        old_full_path = output_dir / "cover-animated.mp4"
+        old_small_path = output_dir / "cover-animated-small.mp4"
+        
+        # Check if GIF files already exist - skip re-encoding
+        if full_path.exists() and small_path.exists():
+            print(f"[ANIMATED COVER] ✅ GIF already exists, skipping: {full_path}", flush=True)
+            return {
+                "full": str(full_path),
+                "small": str(small_path)
+            }
+        
+        # If only full GIF exists, create small version
+        if full_path.exists() and not small_path.exists():
+            print(f"[ANIMATED COVER] Full GIF exists, creating small version only", flush=True)
+            small_palette_path = output_dir / "palette_small.png"
+            small_palette_cmd = [
+                "ffmpeg", "-y",
+                "-i", str(full_path),
+                "-vf", "fps=12,scale=128:-1:flags=lanczos,palettegen",
+                str(small_palette_path)
+            ]
+            result = await asyncio.get_event_loop().run_in_executor(
+                None,
+                lambda: subprocess.run(small_palette_cmd, capture_output=True, timeout=60)
+            )
+            if result.returncode == 0 and small_palette_path.exists():
+                small_gif_cmd = [
+                    "ffmpeg", "-y",
+                    "-i", str(full_path),
+                    "-i", str(small_palette_path),
+                    "-lavfi", "fps=12,scale=128:-1:flags=lanczos[x];[x][1:v]paletteuse",
+                    "-loop", "0",
+                    str(small_path)
+                ]
+                await asyncio.get_event_loop().run_in_executor(
+                    None,
+                    lambda: subprocess.run(small_gif_cmd, capture_output=True, timeout=60)
+                )
+                if small_palette_path.exists():
+                    small_palette_path.unlink()
+            if small_path.exists():
+                return {"full": str(full_path), "small": str(small_path)}
+            return {"full": str(full_path), "small": None}
+        
+        print(f"[ANIMATED COVER] Downloading from: {m3u8_url[:80]}...", flush=True)
+        
+        # First, fetch the master playlist to find the best quality stream
+        import httpx
+        async with httpx.AsyncClient() as client:
+            response = await client.get(m3u8_url)
+            if response.status_code != 200:
+                print(f"[ANIMATED COVER] Failed to fetch playlist: {response.status_code}", flush=True)
+                return None
+            
+            playlist_content = response.text
+        
+        # Parse the master playlist to find the highest resolution variant
+        best_stream_url = m3u8_url  # Default to master if parsing fails
+        best_bandwidth = 0
+        
+        lines = playlist_content.strip().split('\n')
+        for i, line in enumerate(lines):
+            if line.startswith('#EXT-X-STREAM-INF'):
+                # Extract bandwidth
+                bandwidth_match = re.search(r'BANDWIDTH=(\d+)', line)
+                if bandwidth_match:
+                    bandwidth = int(bandwidth_match.group(1))
+                    if bandwidth > best_bandwidth and i + 1 < len(lines):
+                        best_bandwidth = bandwidth
+                        variant_url = lines[i + 1].strip()
+                        # Handle relative URLs
+                        if not variant_url.startswith('http'):
+                            base_url = m3u8_url.rsplit('/', 1)[0]
+                            variant_url = f"{base_url}/{variant_url}"
+                        best_stream_url = variant_url
+        
+        print(f"[ANIMATED COVER] Selected best quality (bandwidth: {best_bandwidth})", flush=True)
+        
+        # Step 1: Download best quality MP4 (for archival and quality)
+        mp4_path = output_dir / "cover-animated.mp4"
+        if not mp4_path.exists():
+            mp4_cmd = [
+                "ffmpeg", "-y",
+                "-i", best_stream_url,
+                "-c:v", "libx264",
+                "-preset", "slow",  # Better quality
+                "-crf", "18",  # High quality
+                "-an",
+                "-movflags", "+faststart",
+                str(mp4_path)
+            ]
+            
+            print(f"[ANIMATED COVER] Downloading best quality MP4...", flush=True)
+            result = await asyncio.get_event_loop().run_in_executor(
+                None,
+                lambda: subprocess.run(mp4_cmd, capture_output=True, timeout=180)
+            )
+            
+            if result.returncode != 0:
+                print(f"[ANIMATED COVER] MP4 download failed: {result.stderr.decode()[:500]}", flush=True)
+                return None
+        else:
+            print(f"[ANIMATED COVER] MP4 already exists, using existing", flush=True)
+        
+        # Step 2: Create high-quality GIF from MP4 (works with CSS backdrop-blur)
+        palette_path = output_dir / "palette.png"
+        
+        # Generate palette from MP4
+        palette_cmd = [
+            "ffmpeg", "-y",
+            "-i", str(mp4_path),
+            "-vf", "fps=25,scale=600:-1:flags=lanczos,palettegen=stats_mode=diff",
+            str(palette_path)
+        ]
+        
+        print(f"[ANIMATED COVER] Generating color palette for GIF...", flush=True)
+        result = await asyncio.get_event_loop().run_in_executor(
+            None,
+            lambda: subprocess.run(palette_cmd, capture_output=True, timeout=120)
+        )
+        
+        if result.returncode != 0:
+            print(f"[ANIMATED COVER] Palette generation failed: {result.stderr.decode()[:500]}", flush=True)
+            # Generate small, optimized GIF (seamless loop)
+            # Resize filter should be part of the complex filter chain?
+            # Or we can just use the same filter logic but change scale.
+            
+            filter_complex_small = (
+                f"[0]split[body][pre];"
+                f"[pre]trim=start={start_trim}:duration={fade_dur},setpts=PTS-STARTPTS[fade];"
+                f"[fade]format=yuva420p,fade=t=out:st=0:d={fade_dur}:alpha=1,setpts=PTS-STARTPTS+(0/TB)[faded];"
+                f"[body]trim=duration={duration},setpts=PTS-STARTPTS[main];"
+                f"[main][faded]overlay=0:0:enable='between(t,0,{fade_dur})'[out];"
+                f"[out]trim=duration={out_dur}[final];"
+                f"[final]fps=15,scale=200:-1:flags=lanczos[x];"
+                f"[x]split[x1][x2];[x1]palettegen[p];[x2][p]paletteuse=dither=bayer:bayer_scale=5:diff_mode=rectangle"
+            )
+            
+            small_cmd = [
+                "ffmpeg", "-y",
+                "-i", str(mp4_path),
+                "-filter_complex", filter_complex_small,
+                "-loop", "0",
+                str(small_path)
+            ]
+            result = await asyncio.get_event_loop().run_in_executor(
+                None,
+                lambda: subprocess.run(small_cmd, capture_output=True, timeout=120)
+            )
+        else:
+            # Use palette for high quality GIF with seamless loop crossfade
+            # Crossfade logic:
+            # 1. Split input into two streams
+            # 2. Trim stream 1 to exclude the fade-out part (start=4:duration=1 is assuming 5s total, but we need to be dynamic)
+            # Actually, since we don't know exact duration here, we rely on the fact that most are short loops.
+            # But the complex filter derived earlier was specific to 5s.
+            # For a generic solution, we should probably stick to a simple loop if we can't guarantee 5s.
+            # However, the user issue was specifcally about the abrupt jump.
+            # Providing a generic crossfade filter for "end to start" overlap:
+            # We will use a safe 0.5s crossfade.
+            
+            # Simple Palette Generation (unchanged, just scale/fps)
+            # We can't easily do complex filter in palettegen if we don't know duration.
+            # So we will just generate palette from the raw MP4 (it's fine, colors won't change much).
+            
+            # But the final GIF generation needs the filter.
+            # The filter used in the script was:
+            # [0]split[body][pre];
+            # [pre]trim=start=4:duration=1...
+            # This requires knowing the duration (5s) and start time (4s).
+            # To do this generically in python, we need to probe the file first.
+            
+            # Since I cannot easily add probing logic here without refactoring, 
+            # and the user confirmed the MP4 is 5.0s, I will apply the filter assuming 5s for now 
+            # OR I can add a quick probe.
+            
+            # PROBING DURATION:
+            # We already have mp4_path.
+            cmd_probe = ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", str(mp4_path)]
+            try:
+                probe_res = subprocess.run(cmd_probe, capture_output=True, text=True)
+                duration = float(probe_res.stdout.strip())
+                fade_dur = 1.0
+                if duration < 2.0: fade_dur = 0.2
+                start_trim = duration - fade_dur
+                out_dur = duration - fade_dur
+                
+                filter_complex = (
+                    f"[0]split[body][pre];"
+                    f"[pre]trim=start={start_trim}:duration={fade_dur},setpts=PTS-STARTPTS[fade];"
+                    f"[fade]format=yuva420p,fade=t=out:st=0:d={fade_dur}:alpha=1,setpts=PTS-STARTPTS+(0/TB)[faded];"
+                    f"[body]trim=duration={duration},setpts=PTS-STARTPTS[main];"
+                    f"[main][faded]overlay=0:0:enable='between(t,0,{fade_dur})'[out];"
+                    f"[out]trim=duration={out_dur}[final];"
+                    f"[final]fps=25,scale=600:-1:flags=lanczos[x];"
+                    f"[x][1:v]paletteuse=dither=bayer:bayer_scale=5:diff_mode=rectangle"
+                )
+                
+                gif_cmd = [
+                    "ffmpeg", "-y",
+                    "-i", str(mp4_path),
+                    "-i", str(palette_path),
+                    "-filter_complex", filter_complex,
+                    "-loop", "0",
+                    str(full_path)
+                ]
+            except Exception as e:
+                print(f"[ANIMATED COVER] Failed to probe duration for crossfade: {e}, falling back to simple loop", flush=True)
+                gif_cmd = [
+                    "ffmpeg", "-y",
+                    "-i", str(mp4_path),
+                    "-i", str(palette_path),
+                    "-lavfi", "fps=25,scale=600:-1:flags=lanczos[x];[x][1:v]paletteuse=dither=bayer:bayer_scale=5:diff_mode=rectangle",
+                    "-loop", "0",
+                    str(full_path)
+                ]
+            
+            print(f"[ANIMATED COVER] Converting MP4 to high-quality GIF...", flush=True)
+            result = await asyncio.get_event_loop().run_in_executor(
+                None,
+                lambda: subprocess.run(gif_cmd, capture_output=True, timeout=120)
+            )
+            
+            # Clean up palette
+            if palette_path.exists():
+                palette_path.unlink()
+        
+        if result.returncode != 0:
+            print(f"[ANIMATED COVER] GIF conversion failed: {result.stderr.decode()[:500]}", flush=True)
+            return None
+        
+        if not full_path.exists():
+            print(f"[ANIMATED COVER] GIF output file not created", flush=True)
+            return None
+        
+        # Step 3: Create smaller GIF version for player
+        small_palette_path = output_dir / "palette_small.png"
+        
+        small_palette_cmd = [
+            "ffmpeg", "-y",
+            "-i", str(full_path),
+            "-vf", "fps=12,scale=128:-1:flags=lanczos,palettegen",
+            str(small_palette_path)
+        ]
+        
+        result = await asyncio.get_event_loop().run_in_executor(
+            None,
+            lambda: subprocess.run(small_palette_cmd, capture_output=True, timeout=60)
+        )
+        
+        if result.returncode == 0 and small_palette_path.exists():
+            small_gif_cmd = [
+                "ffmpeg", "-y",
+                "-i", str(full_path),
+                "-i", str(small_palette_path),
+                "-lavfi", "fps=12,scale=128:-1:flags=lanczos[x];[x][1:v]paletteuse",
+                "-loop", "0",
+                str(small_path)
+            ]
+            result = await asyncio.get_event_loop().run_in_executor(
+                None,
+                lambda: subprocess.run(small_gif_cmd, capture_output=True, timeout=60)
+            )
+            if small_palette_path.exists():
+                small_palette_path.unlink()
+        else:
+            # Fallback without palette
+            small_cmd = [
+                "ffmpeg", "-y",
+                "-i", str(full_path),
+                "-vf", "fps=12,scale=128:-1",
+                "-loop", "0",
+                str(small_path)
+            ]
+            result = await asyncio.get_event_loop().run_in_executor(
+                None,
+                lambda: subprocess.run(small_cmd, capture_output=True, timeout=60)
+            )
+        
+        if result.returncode != 0:
+            print(f"[ANIMATED COVER] Small GIF failed: {result.stderr.decode()[:500]}", flush=True)
+            return {"full": str(full_path), "small": None}
+        
+        print(f"[ANIMATED COVER] ✅ Downloaded MP4 + created both GIF versions", flush=True)
+        return {
+            "full": str(full_path),
+            "small": str(small_path) if small_path.exists() else None
+        }
+        
+    except asyncio.TimeoutError:
+        print(f"[ANIMATED COVER] Download timed out", flush=True)
+        return None
+    except Exception as e:
+        print(f"[ANIMATED COVER] Error downloading: {e}", flush=True)
+        traceback.print_exc()
+        return None
+
+
 def extract_track_info_for_ws(download_item) -> dict:
     """Extract track info from download_item for WebSocket broadcast events."""
     info = {
@@ -781,6 +1136,192 @@ async def download_tracks_for_sync(
     return downloaded_count
 
 
+async def download_missing_codecs_for_sync(
+    missing_tracks: list[tuple[str, list[str]]],  # [(apple_music_id, [missing_codecs]), ...]
+    selected_codecs: str,
+    cookies: str,
+    cursor
+) -> int:
+    """Download specific missing codecs for tracks already in library.
+    
+    Returns the number of codec files successfully downloaded.
+    """
+    import tempfile
+    from pathlib import Path
+    
+    if not missing_tracks:
+        return 0
+    
+    downloaded_count = 0
+    
+    try:
+        from gamdl.api import AppleMusicApi, ItunesApi
+        from gamdl.downloader import (
+            AppleMusicDownloader,
+            AppleMusicBaseDownloader,
+            AppleMusicSongDownloader,
+            AppleMusicMusicVideoDownloader,
+            AppleMusicUploadedVideoDownloader,
+        )
+        from gamdl.interface import (
+            AppleMusicInterface,
+            AppleMusicSongInterface,
+            AppleMusicMusicVideoInterface,
+            AppleMusicUploadedVideoInterface,
+        )
+        from gamdl.interface.enums import SongCodec, SyncedLyricsFormat
+        from gamdl.downloader.enums import CoverFormat
+        
+        # Get settings for output path
+        cursor.execute("SELECT outputPath FROM GamdlSettings WHERE id = 'singleton'")
+        settings_row = cursor.fetchone()
+        
+        if not settings_row or not settings_row[0]:
+            print(f"[SYNC CODEC] No output path configured", flush=True)
+            return 0
+        
+        output_path = Path(settings_row[0])
+        
+        apple_music_api = await get_or_create_api(cookies)
+        if not apple_music_api.active_subscription:
+            print(f"[SYNC CODEC] No active Apple Music subscription", flush=True)
+            return 0
+        
+        itunes_api = ItunesApi(
+            apple_music_api.storefront,
+            apple_music_api.language,
+        )
+        
+        # Set up base interface and downloader
+        interface = AppleMusicInterface(apple_music_api, itunes_api)
+        song_interface = AppleMusicSongInterface(interface)
+        
+        base_downloader = AppleMusicBaseDownloader(
+            wvd_path=str(WVD_PATH) if WVD_PATH.exists() else None,
+            output_path=output_path,
+            temp_path=Path(tempfile.gettempdir()),
+            overwrite=True,  # Allow overwrite since we only download codecs missing from DB
+            save_cover=True,
+            cover_size=1200,
+            cover_format=CoverFormat.JPG,
+        )
+        
+        # Create video interfaces (required by AppleMusicDownloader)
+        music_video_interface = AppleMusicMusicVideoInterface(interface)
+        uploaded_video_interface = AppleMusicUploadedVideoInterface(interface)
+        
+        music_video_downloader = AppleMusicMusicVideoDownloader(
+            base_downloader=base_downloader,
+            interface=music_video_interface,
+        )
+        
+        uploaded_video_downloader = AppleMusicUploadedVideoDownloader(
+            base_downloader=base_downloader,
+            interface=uploaded_video_interface,
+        )
+        
+        for apple_id, missing_codecs in missing_tracks:
+            try:
+                # Build song URL
+                song_url = f"https://music.apple.com/us/song/{apple_id}"
+                
+                # Process each missing codec
+                for codec_str in missing_codecs:
+                    try:
+                        # Convert codec string to enum
+                        codec_key = codec_str.replace('-', '_').upper()
+                        if not hasattr(SongCodec, codec_key):
+                            print(f"[SYNC CODEC] Unknown codec: {codec_str}", flush=True)
+                            continue
+                        
+                        codec_enum = SongCodec[codec_key]
+                        
+                        # Check if wrapper is needed for this codec
+                        use_wrapper = is_wrapper_required(codec_str)
+                        
+                        # Create song downloader for this specific codec
+                        song_downloader = AppleMusicSongDownloader(
+                            base_downloader=base_downloader,
+                            interface=song_interface,
+                            codec=codec_enum,
+                            synced_lyrics_format=SyncedLyricsFormat.LRC,
+                            no_synced_lyrics=True,  # Skip lyrics for codec-only download
+                        )
+                        
+                        # Build full downloader
+                        downloader = AppleMusicDownloader(
+                            interface=interface,
+                            base_downloader=base_downloader,
+                            song_downloader=song_downloader,
+                            music_video_downloader=music_video_downloader,
+                            uploaded_video_downloader=uploaded_video_downloader,
+                        )
+                        
+                        # Parse URL and get download queue
+                        url_info = downloader.get_url_info(song_url)
+                        if not url_info:
+                            print(f"[SYNC CODEC] Could not parse URL for {apple_id}", flush=True)
+                            continue
+                        
+                        download_queue = await downloader.get_download_queue(url_info)
+                        if not download_queue:
+                            print(f"[SYNC CODEC] No downloadable content for {apple_id}", flush=True)
+                            continue
+                        
+                        # Download the track with this codec
+                        for download_item in download_queue:
+                            try:
+                                # Check wrapper availability if needed
+                                if use_wrapper:
+                                    wrapper_dlr = WrapperSongDownloader(
+                                        base_downloader=base_downloader,
+                                        interface=song_interface,
+                                        codec=codec_enum,
+                                    )
+                                    if not wrapper_dlr.is_wrapper_available():
+                                        print(f"[SYNC CODEC] Wrapper not available for {codec_str}, skipping", flush=True)
+                                        break
+                                    final_path = await wrapper_dlr.download(download_item)
+                                else:
+                                    final_path = await downloader.download(download_item)
+                                
+                                if final_path:
+                                    print(f"[SYNC CODEC] ✅ Downloaded {codec_str} for track {apple_id}", flush=True)
+                                    
+                                    # Update track's codecPaths in database
+                                    cursor.execute("SELECT codecPaths FROM Track WHERE appleMusicId = ?", (apple_id,))
+                                    row = cursor.fetchone()
+                                    existing_paths = {}
+                                    if row and row[0]:
+                                        try:
+                                            existing_paths = json.loads(row[0])
+                                        except:
+                                            pass
+                                    
+                                    existing_paths[codec_str] = str(final_path)
+                                    
+                                    cursor.execute(
+                                        "UPDATE Track SET codecPaths = ? WHERE appleMusicId = ?",
+                                        (json.dumps(existing_paths), apple_id)
+                                    )
+                                    cursor.connection.commit()
+                                    downloaded_count += 1
+                                    break  # Only need one download_item per codec
+                            except Exception as dl_err:
+                                print(f"[SYNC CODEC] Download error for {apple_id} ({codec_str}): {dl_err}", flush=True)
+                    except Exception as codec_err:
+                        print(f"[SYNC CODEC] Error downloading {codec_str} for {apple_id}: {codec_err}", flush=True)
+            except Exception as track_err:
+                print(f"[SYNC CODEC] Error processing track {apple_id}: {track_err}", flush=True)
+    
+    except Exception as e:
+        print(f"[SYNC CODEC] Download error: {e}", flush=True)
+        import traceback
+        traceback.print_exc()
+    
+    return downloaded_count
+
+
 async def run_sync_check():
     """Background task to check all synced playlists for updates."""
     import sqlite3
@@ -809,10 +1350,11 @@ async def run_sync_check():
         
         cookies, _, auto_sync = settings
         
-        # Get all synced playlists with their local track count
+        # Get all synced playlists with their local track count and selectedCodecs
         cursor.execute("""
             SELECT p.id, p.name, p.appleMusicId, p.appleLastModifiedDate, 
-                   (SELECT COUNT(*) FROM PlaylistTrack pt WHERE pt.playlistId = p.id) as trackCount
+                   (SELECT COUNT(*) FROM PlaylistTrack pt WHERE pt.playlistId = p.id) as trackCount,
+                   p.selectedCodecs
             FROM Playlist p 
             WHERE p.isSynced = 1 AND p.appleMusicId IS NOT NULL
         """)
@@ -830,9 +1372,9 @@ async def run_sync_check():
         
         print(f"[SYNC CHECK] Checking {len(playlists)} synced playlists...", flush=True)
         
-        # Get local track IDs for all playlists in one query for efficiency
+        # Get local track IDs and codecPaths for all playlists in one query for efficiency
         cursor.execute("""
-            SELECT pt.playlistId, t.appleMusicId, pt.position
+            SELECT pt.playlistId, t.appleMusicId, pt.position, t.codecPaths
             FROM PlaylistTrack pt 
             JOIN Track t ON pt.trackId = t.id 
             WHERE pt.playlistId IN (SELECT id FROM Playlist WHERE isSynced = 1)
@@ -840,12 +1382,12 @@ async def run_sync_check():
         """)
         local_tracks_all = cursor.fetchall()
         
-        # Group by playlist
+        # Group by playlist - now includes codecPaths
         local_playlist_tracks = {}
-        for playlist_id, apple_id, position in local_tracks_all:
+        for playlist_id, apple_id, position, codec_paths in local_tracks_all:
             if playlist_id not in local_playlist_tracks:
                 local_playlist_tracks[playlist_id] = []
-            local_playlist_tracks[playlist_id].append((apple_id, position))
+            local_playlist_tracks[playlist_id].append((apple_id, position, codec_paths))
         
         # Also fetch local playlist name, description, and artwork URL
         cursor.execute("SELECT id, name, description, artworkUrl FROM Playlist WHERE isSynced = 1")
@@ -856,7 +1398,7 @@ async def run_sync_check():
         needs_sync = []
         sync_reasons = {}  # Track why each playlist needs sync
         
-        for playlist_id, name, apple_music_id, local_modified, local_track_count in playlists:
+        for playlist_id, name, apple_music_id, local_modified, local_track_count, selected_codecs in playlists:
             try:
                 apple_music_api = await get_or_create_api(cookies)
                 
@@ -881,9 +1423,18 @@ async def run_sync_check():
                 tracks_data = rels.get("tracks", {}).get("data", [])
                 remote_track_ids = [t.get("id") for t in tracks_data if t.get("id")]
                 
-                # Get local track IDs in order
+                # Get local track IDs, positions, and codecPaths
                 local_tracks = local_playlist_tracks.get(playlist_id, [])
                 local_track_ids = [t[0] for t in sorted(local_tracks, key=lambda x: x[1]) if t[0]]
+                
+                # Build a map of apple_id -> codecPaths for missing codec detection
+                local_codec_map = {}
+                for apple_id, pos, codec_paths in local_tracks:
+                    if apple_id:
+                        try:
+                            local_codec_map[apple_id] = json.loads(codec_paths) if codec_paths else {}
+                        except:
+                            local_codec_map[apple_id] = {}
                 
                 # Check how many remote tracks exist in our library at all
                 library_track_ids = set()
@@ -900,8 +1451,18 @@ async def run_sync_check():
                 syncable_remote_ids = [t for t in remote_track_ids if t in library_track_ids]
                 pending_download_ids = [t for t in remote_track_ids if t not in library_track_ids]
                 
+                # Check for missing codecs on existing tracks
+                missing_codec_tracks = []
+                wanted_codecs = set(selected_codecs.split(',')) if selected_codecs else set()
+                if wanted_codecs:
+                    for apple_id in syncable_remote_ids:
+                        existing_codecs = set(local_codec_map.get(apple_id, {}).keys())
+                        missing = wanted_codecs - existing_codecs
+                        if missing:
+                            missing_codec_tracks.append((apple_id, list(missing)))
+                
                 # Debug: show comparison
-                print(f"[SYNC DEBUG] '{name}': remote={len(remote_track_ids)}, in library={len(syncable_remote_ids)}, in playlist={len(local_track_ids)}, pending_dl={len(pending_download_ids)}", flush=True)
+                print(f"[SYNC DEBUG] '{name}': remote={len(remote_track_ids)}, in library={len(syncable_remote_ids)}, in playlist={len(local_track_ids)}, pending_dl={len(pending_download_ids)}, missing_codecs={len(missing_codec_tracks)}", flush=True)
                 
                 # Log the actual IDs to diagnose mismatches
                 if pending_download_ids:
@@ -909,13 +1470,17 @@ async def run_sync_check():
                     print(f"[SYNC DEBUG] '{name}' remote IDs: {remote_track_ids}", flush=True)
                     print(f"[SYNC DEBUG] '{name}' library matched IDs: {list(library_track_ids)}", flush=True)
                 
+                if missing_codec_tracks:
+                    print(f"[SYNC DEBUG] '{name}' tracks need additional codecs: {len(missing_codec_tracks)}", flush=True)
+                
                 if syncable_remote_ids != local_track_ids:
                     print(f"[SYNC DEBUG] '{name}' syncable_remote: {syncable_remote_ids[:3]}...", flush=True)
                     print(f"[SYNC DEBUG] '{name}' local_playlist: {local_track_ids[:3]}...", flush=True)
                 
-                # IMPORTANT: Also trigger sync if there are pending downloads!
-                # We need to download these tracks even if syncable tracks match local
+                # IMPORTANT: Also trigger sync if there are pending downloads or missing codecs!
                 has_pending_downloads = len(pending_download_ids) > 0
+                has_missing_codecs = len(missing_codec_tracks) > 0
+
                 
                 # Compare only syncable tracks vs local tracks
                 tracks_differ = syncable_remote_ids != local_track_ids or has_pending_downloads
@@ -947,6 +1512,8 @@ async def run_sync_check():
                     reasons.append("description")
                 if artwork_differs:
                     reasons.append("artwork")
+                if has_missing_codecs:
+                    reasons.append(f"missing codecs ({len(missing_codec_tracks)} tracks)")
                 
                 if reasons:
                     print(f"[SYNC DEBUG] '{name}' needs sync: {', '.join(reasons)}", flush=True)
@@ -958,7 +1525,9 @@ async def run_sync_check():
                         "artwork_differs": artwork_differs,
                         "remote_name": remote_name,
                         "remote_desc": remote_desc,
-                        "remote_artwork_url": remote_artwork_url
+                        "remote_artwork_url": remote_artwork_url,
+                        "missing_codec_tracks": missing_codec_tracks,
+                        "selected_codecs": selected_codecs
                     }
                 else:
                     print(f"[SYNC DEBUG] '{name}' up to date", flush=True)
@@ -1076,6 +1645,22 @@ async def run_sync_check():
                                     if downloaded > 0:
                                         added_count += downloaded
                                         print(f"[SYNC CHECK] ✅ Downloaded and added {downloaded} tracks", flush=True)
+                            
+                            # Download missing codecs for existing tracks
+                            reason_data = sync_reasons.get(playlist_id, {})
+                            missing_codec_tracks = reason_data.get("missing_codec_tracks", [])
+                            selected_codecs = reason_data.get("selected_codecs", "")
+                            
+                            if missing_codec_tracks and selected_codecs:
+                                print(f"[SYNC CHECK] Downloading missing codecs for {len(missing_codec_tracks)} tracks in '{name}'...", flush=True)
+                                codec_downloaded = await download_missing_codecs_for_sync(
+                                    missing_tracks=missing_codec_tracks,
+                                    selected_codecs=selected_codecs,
+                                    cookies=cookies,
+                                    cursor=cursor
+                                )
+                                if codec_downloaded > 0:
+                                    print(f"[SYNC CHECK] ✅ Downloaded {codec_downloaded} missing codec files", flush=True)
                             
                             # Update track positions to match remote order
                             cursor.execute("""
@@ -1984,12 +2569,16 @@ def extract_apple_music_ids_from_item(download_item) -> dict:
     return result
 
 async def extract_album_metadata_from_api(apple_music_api, content_id: str, is_library: bool = False) -> dict:
-    """Extract extended album metadata from Apple Music API."""
+    """Extract extended album metadata from Apple Music API, including animated cover."""
     try:
         if is_library:
             album_data = await apple_music_api.get_library_album(content_id)
         else:
-            album_data = await apple_music_api.get_album(content_id)
+            # Request editorialVideo for animated covers along with extendedAssetUrls
+            album_data = await apple_music_api.get_album(
+                content_id, 
+                extend="extendedAssetUrls,editorialVideo"
+            )
         
         if not album_data:
             return {}
@@ -2009,6 +2598,9 @@ async def extract_album_metadata_from_api(apple_music_api, content_id: str, is_l
         if editorial_notes:
             description = editorial_notes.get("standard") or editorial_notes.get("short")
         
+        # Extract animated cover URL (motion artwork)
+        animated_cover_url = get_animated_cover_url(attrs)
+        
         return {
             # Core album metadata
             "copyright": attrs.get("copyright"),
@@ -2026,6 +2618,8 @@ async def extract_album_metadata_from_api(apple_music_api, content_id: str, is_l
             "artworkTextColor3": artwork.get("textColor3"),
             "artworkTextColor4": artwork.get("textColor4"),
             "albumAppleMusicId": attrs.get("playParams", {}).get("id") or content_id,
+            # Animated cover (motion artwork)
+            "animatedCoverUrl": animated_cover_url,
         }
     except Exception as e:
         print(f"Error extracting album metadata from API: {e}")
@@ -3106,8 +3700,30 @@ async def download_song(request: DownloadRequest):
                     "codecs": codec_list, # Add codecs list
                 }))
                 
+                # For albums/playlists: Check per-track codec availability
+                # This filters the requested codecs to only those actually available for this track
+                track_codec_list = codec_list  # Default to full list
+                try:
+                    content_id = download_item.media_metadata.get("id")
+                    if content_id and len(codec_list) > 1:  # Only check if multiple codecs requested
+                        webplayback = await apple_music_api.get_webplayback(content_id)
+                        if webplayback:
+                            attrs = download_item.media_metadata.get("attributes", {})
+                            available_codecs = parse_webplayback_codecs(webplayback, attrs)
+                            # Filter to only requested codecs that are available
+                            track_codec_list = [c for c in codec_list if c in available_codecs]
+                            if not track_codec_list:
+                                # Fallback to first requested codec if none match
+                                track_codec_list = [codec_list[0]]
+                                print(f"[DEBUG] Track {i+1}: No requested codecs available, falling back to {track_codec_list[0]}", flush=True)
+                            elif len(track_codec_list) < len(codec_list):
+                                skipped = set(codec_list) - set(track_codec_list)
+                                print(f"[DEBUG] Track {i+1}: Skipping unavailable codecs: {skipped}", flush=True)
+                except Exception as wp_e:
+                    print(f"[DEBUG] Track {i+1}: Could not check codec availability, using all: {wp_e}", flush=True)
+                
                 # Perform download for each codec IN PARALLEL
-                print(f"[DEBUG] Processing codecs: {codec_list} for track {i + 1} (PARALLEL)...", flush=True)
+                print(f"[DEBUG] Processing codecs: {track_codec_list} for track {i + 1} (PARALLEL)...", flush=True)
                 
                 import copy
                 import shutil
@@ -3373,8 +3989,8 @@ async def download_song(request: DownloadRequest):
                 # - Wrapper-path codecs run in parallel (independent HTTP calls)
                 # - Gamdl-path codecs run sequentially (share interface state)
                 # - BOTH groups start CONCURRENTLY
-                wrapper_codecs = [c for c in codec_list if is_wrapper_required(c)]
-                gamdl_codecs = [c for c in codec_list if not is_wrapper_required(c)]
+                wrapper_codecs = [c for c in track_codec_list if is_wrapper_required(c)]
+                gamdl_codecs = [c for c in track_codec_list if not is_wrapper_required(c)]
                 
                 print(f"[DEBUG] Wrapper codecs (parallel): {wrapper_codecs}", flush=True)
                 print(f"[DEBUG] Gamdl codecs (sequential): {gamdl_codecs}", flush=True)
@@ -3387,7 +4003,7 @@ async def download_song(request: DownloadRequest):
                         # Add delay between gamdl downloads to let interface state settle
                         if idx > 0:
                             await asyncio.sleep(0.5)  # 500ms delay between gamdl codecs
-                        result = await download_single_codec(codec_list.index(codec), codec)
+                        result = await download_single_codec(track_codec_list.index(codec), codec)
                         results.append(result)
                     return results
                 
@@ -3395,7 +4011,7 @@ async def download_song(request: DownloadRequest):
                 # - Wrapper codecs: each runs in parallel with others
                 # - Gamdl codecs: run sequentially, but the group starts alongside wrapper
                 wrapper_tasks = [
-                    download_single_codec(codec_list.index(codec), codec) 
+                    download_single_codec(track_codec_list.index(codec), codec) 
                     for codec in wrapper_codecs
                 ]
                 
@@ -3604,6 +4220,31 @@ async def download_song(request: DownloadRequest):
                         if potential_cover.exists():
                             cover_path = str(potential_cover)
 
+                    # Download animated cover if available (only once per album)
+                    animated_cover_path = None
+                    animated_cover_small_path = None
+                    animated_cover_url = album_metadata.get("animatedCoverUrl")
+                    if animated_cover_url and i == 0:  # Only download for first track
+                        try:
+                            output_dir = Path(file_path).parent
+                            animated_paths = await download_animated_cover(
+                                animated_cover_url, output_dir, 
+                                album_metadata.get("albumAppleMusicId", "unknown")
+                            )
+                            if animated_paths:
+                                animated_cover_path = animated_paths.get("full")
+                                animated_cover_small_path = animated_paths.get("small")
+                        except Exception as e:
+                            print(f"[ANIMATED COVER] Failed to download: {e}", flush=True)
+                    elif animated_cover_url and i > 0:
+                        # For subsequent tracks, check if animated cover already exists
+                        potential_animated = Path(file_path).parent / "cover-animated.mp4"
+                        potential_animated_small = Path(file_path).parent / "cover-animated-small.mp4"
+                        if potential_animated.exists():
+                            animated_cover_path = str(potential_animated)
+                        if potential_animated_small.exists():
+                            animated_cover_small_path = str(potential_animated_small)
+
                     yield {
                         "event": "track_complete",
                         "data": json.dumps({
@@ -3613,6 +4254,8 @@ async def download_song(request: DownloadRequest):
                             # removed duplicate codecPaths key that was overwriting the map
                             "lyricsPath": lyrics_path,
                             "coverPath": cover_path,
+                            "animatedCoverPath": animated_cover_path,
+                            "animatedCoverSmallPath": animated_cover_small_path,
                             "metadata": metadata,
                             "current": i + 1,
                             "total": total_tracks,

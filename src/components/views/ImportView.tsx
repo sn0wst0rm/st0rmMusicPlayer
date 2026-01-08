@@ -227,6 +227,10 @@ export function ImportView() {
                                 const firstNotDownloaded = item.available_codecs.find((c: string) => !downloaded.has(c))
                                 setSelectedCodecs(firstNotDownloaded ? [firstNotDownloaded] : [])
                             }
+                        } else if (item.type === 'album' || item.type === 'playlist') {
+                            // For albums/playlists, use default codecs from settings
+                            // Availability is checked per-track during download
+                            setSelectedCodecs(defaultCodecs.length > 0 ? [...defaultCodecs] : ['aac-legacy'])
                         } else {
                             setSelectedCodecs([])
                         }
@@ -397,13 +401,13 @@ export function ImportView() {
                         // Update progress
                         setDownloadProgress({ current: data.current, total: data.total })
 
-                        // Show toast - prefer metadata.title over top-level title
-                        const trackTitle = data.metadata?.title || data.title || 'Track'
-                        toast.success(`${trackTitle} imported successfully!`, {
-                            description: `Added to library.`,
-                        })
-
                         if (data.current === data.total) {
+                            // Show toast only when entire import job is complete
+                            const jobTitle = validationResult?.title || data.metadata?.album || data.metadata?.title || 'Import'
+                            toast.success(`${jobTitle} imported successfully!`, {
+                                description: `Added to library.`,
+                            })
+
                             setIsDownloading(false)
                             setValidationResult(null)
                             setUrl('')
@@ -791,10 +795,15 @@ export function ImportView() {
                                             const allCodecs = [
                                                 'aac-legacy',
                                                 'aac-he-legacy',
+                                                'aac',
+                                                'aac-he',
                                                 'alac',
                                                 'atmos',
                                                 'aac-binaural',
+                                                'aac-he-binaural',
                                                 'aac-downmix',
+                                                'aac-he-downmix',
+                                                'ac3',
                                             ]
                                             const codecLabels: Record<string, { label: string; category: 'standard' | 'hires' | 'spatial' }> = {
                                                 'aac-legacy': { label: 'AAC', category: 'standard' },
@@ -1028,26 +1037,12 @@ export function ImportView() {
                                                 onClick={() => {
                                                     // For playlists, navigate to playlist view
                                                     if (job.type === 'playlist' && job.importedPlaylistId) {
-                                                        navigateToPlaylist(job.importedPlaylistId)
+                                                        window.location.href = `/playlist/${job.importedPlaylistId}`
                                                         return
                                                     }
-                                                    // For albums, find and navigate to album
-                                                    for (const artist of library) {
-                                                        const album = artist.albums.find(a => a.id === job.importedAlbumId)
-                                                        if (album) {
-                                                            setSelectedAlbum({
-                                                                id: album.id,
-                                                                title: album.title,
-                                                                artistName: artist.name,
-                                                                tracks: album.tracks,
-                                                                description: album.description ?? undefined,
-                                                                copyright: album.copyright ?? undefined,
-                                                                genre: album.genre ?? undefined,
-                                                                releaseDate: album.releaseDate ?? undefined,
-                                                                recordLabel: album.recordLabel ?? undefined
-                                                            })
-                                                            return
-                                                        }
+                                                    // For albums and songs, navigate to album
+                                                    if (job.importedAlbumId) {
+                                                        window.location.href = `/album/${job.importedAlbumId}`
                                                     }
                                                 }}
                                                 className="font-medium truncate text-left hover:underline hover:text-primary transition-colors block w-full"

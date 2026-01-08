@@ -111,12 +111,17 @@ async function insertTrackToLibrary(event: TrackCompleteEvent): Promise<{ albumI
                 genre: metadata.genre || undefined,
                 releaseDate: metadata.releaseDate ? new Date(metadata.releaseDate) : undefined,
                 trackTotal: metadata.trackTotal || undefined,
-                // coverImage: coverPath || undefined, // Field does not exist
+                discTotal: metadata.discTotal || undefined,
+                copyright: metadata.copyright || undefined,
+                recordLabel: metadata.recordLabel || undefined,
+                upc: metadata.upc || undefined,
+                isSingle: metadata.isSingle || undefined,
                 description: metadata.description || undefined,
                 artworkBgColor: metadata.artworkBgColor || undefined,
-                // We keep title and artistId as is to preserve user/library integrity
-                // or we could force update them if we trust the metadata fully.
-                // For now, assume ID match implies correct record.
+                artworkTextColor1: metadata.artworkTextColor1 || undefined,
+                artworkTextColor2: metadata.artworkTextColor2 || undefined,
+                artworkTextColor3: metadata.artworkTextColor3 || undefined,
+                artworkTextColor4: metadata.artworkTextColor4 || undefined,
             }
         });
     } else {
@@ -150,13 +155,21 @@ async function insertTrackToLibrary(event: TrackCompleteEvent): Promise<{ albumI
                 artworkTextColor4: metadata.artworkTextColor4 || null,
             },
             update: {
-                // Update metadata if available
+                // Update metadata if available - include all fields
                 genre: metadata.genre || undefined,
                 releaseDate: metadata.releaseDate ? new Date(metadata.releaseDate) : undefined,
                 trackTotal: metadata.trackTotal || undefined,
-                // coverImage: coverPath || undefined, // Field does not exist
+                discTotal: metadata.discTotal || undefined,
+                copyright: metadata.copyright || undefined,
+                recordLabel: metadata.recordLabel || undefined,
+                upc: metadata.upc || undefined,
+                isSingle: metadata.isSingle !== undefined ? metadata.isSingle : undefined,
                 description: metadata.description || undefined,
                 artworkBgColor: metadata.artworkBgColor || undefined,
+                artworkTextColor1: metadata.artworkTextColor1 || undefined,
+                artworkTextColor2: metadata.artworkTextColor2 || undefined,
+                artworkTextColor3: metadata.artworkTextColor3 || undefined,
+                artworkTextColor4: metadata.artworkTextColor4 || undefined,
                 appleMusicId: metadata.albumAppleMusicId || undefined
             }
         });

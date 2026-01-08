@@ -155,3 +155,37 @@ export async function DELETE(request: Request, { params }: RouteParams) {
         );
     }
 }
+
+// PATCH playlist - partial update (e.g., selectedCodecs)
+export async function PATCH(request: Request, { params }: RouteParams) {
+    const { id } = await params;
+
+    try {
+        const body = await request.json();
+        const { selectedCodecs } = body;
+
+        const updateData: { selectedCodecs?: string | null } = {};
+
+        if (selectedCodecs !== undefined) {
+            updateData.selectedCodecs = typeof selectedCodecs === 'string' ? selectedCodecs : null;
+        }
+
+        const playlist = await db.playlist.update({
+            where: { id },
+            data: updateData,
+            select: {
+                id: true,
+                name: true,
+                selectedCodecs: true
+            }
+        });
+
+        return NextResponse.json(playlist);
+    } catch (error) {
+        console.error('Error patching playlist:', error);
+        return NextResponse.json(
+            { error: 'Failed to update playlist' },
+            { status: 500 }
+        );
+    }
+}

@@ -7,7 +7,15 @@ export async function GET() {
             albums: {
                 include: {
                     tracks: {
-                        orderBy: { trackNumber: 'asc' }
+                        orderBy: { trackNumber: 'asc' },
+                        include: {
+                            album: {
+                                select: {
+                                    title: true,
+                                    animatedCoverPath: true
+                                }
+                            }
+                        }
                     }
                 }
             }

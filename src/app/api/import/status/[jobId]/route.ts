@@ -57,6 +57,8 @@ interface TrackCompleteEvent {
     codecPaths?: Record<string, string>; // {"aac-legacy": "/path", "alac": "/path"}
     lyricsPath?: string;
     coverPath?: string;
+    animatedCoverPath?: string;
+    animatedCoverSmallPath?: string;
     metadata: TrackMetadata;
     current: number;
     total: number;
@@ -64,7 +66,7 @@ interface TrackCompleteEvent {
 
 // Helper to upsert artist, album, track into database
 async function insertTrackToLibrary(event: TrackCompleteEvent): Promise<{ albumId: string; artistId: string; trackId: string }> {
-    const { filePath, lyricsPath, coverPath, metadata } = event;
+    const { filePath, lyricsPath, coverPath, animatedCoverPath, animatedCoverSmallPath, metadata } = event;
 
     // 1. Upsert Artist
     const artistName = metadata.albumArtist || metadata.artist || 'Unknown Artist';
@@ -112,7 +114,9 @@ async function insertTrackToLibrary(event: TrackCompleteEvent): Promise<{ albumI
             artworkTextColor1: metadata.artworkTextColor1 || null,
             artworkTextColor2: metadata.artworkTextColor2 || null,
             artworkTextColor3: metadata.artworkTextColor3 || null,
-            artworkTextColor4: metadata.artworkTextColor4 || null
+            artworkTextColor4: metadata.artworkTextColor4 || null,
+            animatedCoverPath: animatedCoverPath || null,
+            animatedCoverSmallPath: animatedCoverSmallPath || null
         },
         update: {
             appleMusicId: metadata.albumAppleMusicId || undefined,
@@ -134,7 +138,9 @@ async function insertTrackToLibrary(event: TrackCompleteEvent): Promise<{ albumI
             artworkTextColor1: metadata.artworkTextColor1 || undefined,
             artworkTextColor2: metadata.artworkTextColor2 || undefined,
             artworkTextColor3: metadata.artworkTextColor3 || undefined,
-            artworkTextColor4: metadata.artworkTextColor4 || undefined
+            artworkTextColor4: metadata.artworkTextColor4 || undefined,
+            animatedCoverPath: animatedCoverPath || undefined,
+            animatedCoverSmallPath: animatedCoverSmallPath || undefined
         }
     });
 

@@ -22,6 +22,7 @@ export async function GET() {
                 lastSyncedAt: true,
                 appleLastModifiedDate: true,
                 artworkUrl: true,
+                selectedCodecs: true,
                 _count: {
                     select: { tracks: true }
                 }
@@ -52,6 +53,7 @@ export async function GET() {
                 lastSyncedAt: p.lastSyncedAt,
                 appleLastModifiedDate: p.appleLastModifiedDate,
                 artworkUrl: p.artworkUrl,
+                selectedCodecs: p.selectedCodecs,
                 trackCount: p._count.tracks
             }))
         });
@@ -67,20 +69,14 @@ export async function GET() {
 // POST - trigger a manual sync check
 export async function POST() {
     try {
-        // Trigger sync via gamdl service
-        const response = await fetch(`${GAMDL_SERVICE_URL}/trigger-sync-check`, {
+        // Fire-and-forget: Trigger sync via gamdl service without waiting for completion
+        // Sync with codec downloads can take a very long time (multiple tracks * multiple codecs)
+        fetch(`${GAMDL_SERVICE_URL}/trigger-sync-check`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            signal: AbortSignal.timeout(10000)
+        }).catch(err => {
+            console.error('Background sync trigger failed:', err);
         });
-
-        if (!response.ok) {
-            const error = await response.text();
-            return NextResponse.json(
-                { error: `Sync trigger failed: ${error}` },
-                { status: response.status }
-            );
-        }
 
         return NextResponse.json({ success: true, message: 'Sync check triggered' });
     } catch (error) {
