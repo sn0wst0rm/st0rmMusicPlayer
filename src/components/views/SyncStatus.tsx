@@ -2,10 +2,32 @@
 
 import React, { useEffect, useState, useRef, useCallback } from 'react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { RefreshCw, Check, AlertCircle, Music2, ExternalLink } from "lucide-react"
+import { RefreshCw, Check, AlertCircle, Music2, ExternalLink, Settings2 } from "lucide-react"
 import { Button } from "@/components/ui/button"
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { toast } from "sonner"
 import { usePlayerStore } from "@/lib/store"
+import { cn } from "@/lib/utils"
+
+// Codec labels for display
+const CODEC_LABELS: Record<string, { label: string; category: 'standard' | 'hires' | 'spatial' }> = {
+    'aac-legacy': { label: 'AAC', category: 'standard' },
+    'aac-he-legacy': { label: 'AAC-HE', category: 'standard' },
+    'aac': { label: 'AAC 48kHz', category: 'standard' },
+    'aac-he': { label: 'AAC-HE 48kHz', category: 'standard' },
+    'alac': { label: 'Lossless', category: 'hires' },
+    'atmos': { label: 'Dolby Atmos', category: 'spatial' },
+    'aac-binaural': { label: 'Spatial', category: 'spatial' },
+    'aac-he-binaural': { label: 'Spatial HE', category: 'spatial' },
+    'aac-downmix': { label: 'Downmix', category: 'standard' },
+    'aac-he-downmix': { label: 'HE Downmix', category: 'standard' },
+    'ac3': { label: 'AC3', category: 'spatial' },
+}
+
+const ALL_CODECS = [
+    'aac-legacy', 'aac-he-legacy', 'aac', 'aac-he', 'alac',
+    'atmos', 'aac-binaural', 'aac-he-binaural', 'aac-downmix', 'aac-he-downmix', 'ac3'
+]
 
 interface SyncedPlaylist {
     id: string
@@ -16,6 +38,7 @@ interface SyncedPlaylist {
     appleLastModifiedDate: string | null
     artworkUrl: string | null
     trackCount: number
+    selectedCodecs: string | null // Comma-separated codecs for this playlist
 }
 
 interface SyncStatusData {
@@ -113,6 +136,33 @@ export function SyncStatus() {
             toast.error('Failed to trigger sync')
         } finally {
             setSyncing(false)
+        }
+    }
+
+    const updatePlaylistCodecs = async (playlistId: string, codecs: string[]) => {
+        try {
+            const res = await fetch(`/api/playlists/${playlistId}`, {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ selectedCodecs: codecs.join(',') })
+            })
+            if (res.ok) {
+                // Update local state
+                setData(prev => {
+                    if (!prev) return prev
+                    return {
+                        ...prev,
+                        syncedPlaylists: prev.syncedPlaylists.map(p =>
+                            p.id === playlistId ? { ...p, selectedCodecs: codecs.join(',') } : p
+                        )
+                    }
+                })
+                toast.success('Codecs updated')
+            } else {
+                toast.error('Failed to update codecs')
+            }
+        } catch (err) {
+            toast.error('Failed to update codecs')
         }
     }
 
@@ -221,46 +271,116 @@ export function SyncStatus() {
                     </div>
                 ) : (
                     <div className="space-y-2 max-h-80 overflow-y-auto">
-                        {data.syncedPlaylists.map((playlist) => (
-                            <div
-                                key={playlist.id}
-                                className="flex items-center gap-3 p-3 rounded-lg bg-muted/50 hover:bg-muted transition-colors"
-                            >
-                                {playlist.artworkUrl ? (
-                                    <img
-                                        src={playlist.artworkUrl}
-                                        alt=""
-                                        className="w-10 h-10 rounded object-cover"
-                                    />
-                                ) : (
-                                    <div className="w-10 h-10 rounded bg-muted flex items-center justify-center">
-                                        <Music2 className="h-5 w-5 text-muted-foreground" />
+                        {data.syncedPlaylists.map((playlist) => {
+                            const playlistCodecs = playlist.selectedCodecs?.split(',').filter(c => c) || ['aac-legacy']
+                            return (
+                                <div
+                                    key={playlist.id}
+                                    className="flex flex-col gap-2 p-3 rounded-lg bg-muted/50 hover:bg-muted transition-colors"
+                                >
+                                    <div className="flex items-center gap-3">
+                                        {playlist.artworkUrl ? (
+                                            <img
+                                                src={playlist.artworkUrl}
+                                                alt=""
+                                                className="w-10 h-10 rounded object-cover"
+                                            />
+                                        ) : (
+                                            <div className="w-10 h-10 rounded bg-muted flex items-center justify-center">
+                                                <Music2 className="h-5 w-5 text-muted-foreground" />
+                                            </div>
+                                        )}
+                                        <div className="flex-1 min-w-0">
+                                            <p className="text-sm font-medium truncate">
+                                                {playlist.name}
+                                            </p>
+                                            <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                                                <span>{playlist.trackCount} tracks</span>
+                                                <span>•</span>
+                                                <span>Synced {formatDate(playlist.lastSyncedAt)}</span>
+                                            </div>
+                                        </div>
+                                        <div className="flex items-center gap-2">
+                                            <Check className="h-4 w-4 text-green-500" />
+                                            <a
+                                                href={getAppleMusicUrl(playlist, data.storefront)}
+                                                target="_blank"
+                                                rel="noopener noreferrer"
+                                                className="text-muted-foreground hover:text-foreground transition-colors"
+                                                title="Open in Apple Music"
+                                            >
+                                                <ExternalLink className="h-4 w-4" />
+                                            </a>
+                                        </div>
                                     </div>
-                                )}
-                                <div className="flex-1 min-w-0">
-                                    <p className="text-sm font-medium truncate">
-                                        {playlist.name}
-                                    </p>
-                                    <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                                        <span>{playlist.trackCount} tracks</span>
-                                        <span>•</span>
-                                        <span>Synced {formatDate(playlist.lastSyncedAt)}</span>
+                                    {/* Codec selection row */}
+                                    <div className="flex items-center gap-2 flex-wrap">
+                                        {playlistCodecs.map(codec => {
+                                            const info = CODEC_LABELS[codec] || { label: codec.toUpperCase(), category: 'standard' }
+                                            return (
+                                                <span
+                                                    key={codec}
+                                                    className={cn(
+                                                        "px-2 py-0.5 rounded text-[10px] font-medium",
+                                                        info.category === 'hires'
+                                                            ? "bg-purple-500/20 text-purple-600 dark:text-purple-300"
+                                                            : info.category === 'spatial'
+                                                                ? "bg-blue-500/20 text-blue-600 dark:text-blue-300"
+                                                                : "bg-primary/20 text-primary"
+                                                    )}
+                                                >
+                                                    {info.label}
+                                                </span>
+                                            )
+                                        })}
+                                        <Popover>
+                                            <PopoverTrigger asChild>
+                                                <button className="p-1 rounded hover:bg-muted-foreground/10 text-muted-foreground hover:text-foreground transition-colors" title="Edit codecs">
+                                                    <Settings2 className="h-3.5 w-3.5" />
+                                                </button>
+                                            </PopoverTrigger>
+                                            <PopoverContent className="w-64 p-3" align="start">
+                                                <p className="text-xs font-medium mb-2">Select codecs for sync</p>
+                                                <div className="flex flex-wrap gap-1.5">
+                                                    {ALL_CODECS.map(codec => {
+                                                        const isSelected = playlistCodecs.includes(codec)
+                                                        const info = CODEC_LABELS[codec]
+                                                        return (
+                                                            <button
+                                                                key={codec}
+                                                                onClick={() => {
+                                                                    const newCodecs = isSelected
+                                                                        ? playlistCodecs.filter(c => c !== codec)
+                                                                        : [...playlistCodecs, codec]
+                                                                    if (newCodecs.length > 0) {
+                                                                        updatePlaylistCodecs(playlist.id, newCodecs)
+                                                                    }
+                                                                }}
+                                                                className={cn(
+                                                                    "px-2 py-0.5 rounded text-[10px] font-medium transition-all border",
+                                                                    isSelected
+                                                                        ? info.category === 'hires'
+                                                                            ? "border-purple-500 bg-purple-500/20 text-purple-600 dark:text-purple-300"
+                                                                            : info.category === 'spatial'
+                                                                                ? "border-blue-500 bg-blue-500/20 text-blue-600 dark:text-blue-300"
+                                                                                : "border-primary bg-primary/20 text-primary"
+                                                                        : "border-transparent bg-muted/50 text-muted-foreground hover:bg-muted"
+                                                                )}
+                                                            >
+                                                                {info.label}
+                                                            </button>
+                                                        )
+                                                    })}
+                                                </div>
+                                                <p className="text-[10px] text-muted-foreground mt-2">
+                                                    Unavailable codecs will be skipped per track
+                                                </p>
+                                            </PopoverContent>
+                                        </Popover>
                                     </div>
                                 </div>
-                                <div className="flex items-center gap-2">
-                                    <Check className="h-4 w-4 text-green-500" />
-                                    <a
-                                        href={getAppleMusicUrl(playlist, data.storefront)}
-                                        target="_blank"
-                                        rel="noopener noreferrer"
-                                        className="text-muted-foreground hover:text-foreground transition-colors"
-                                        title="Open in Apple Music"
-                                    >
-                                        <ExternalLink className="h-4 w-4" />
-                                    </a>
-                                </div>
-                            </div>
-                        ))}
+                            )
+                        })}
                     </div>
                 )}
             </CardContent>

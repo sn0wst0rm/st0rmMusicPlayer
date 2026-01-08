@@ -119,6 +119,7 @@ model Playlist {
     appleLastModifiedDate DateTime? // Apple Music's lastModifiedDate for sync comparison
     artworkUrl            String? // Apple Music artwork URL
     isSynced              Boolean         @default(false) // If true, playlist is read-only (synced from Apple Music)
+    selectedCodecs        String? // Comma-separated codecs to download for this playlist (e.g., "aac-legacy,alac")
     m3u8Path              String? // Path to generated M3U8 file
     createdAt             DateTime        @default(now())
     updatedAt             DateTime        @updatedAt
