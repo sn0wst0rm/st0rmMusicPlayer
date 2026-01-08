@@ -32,11 +32,59 @@ export async function getCoverPath(albumId: string, size: CoverSize): Promise<st
 }
 
 export async function generateCovers(albumId: string, audioFilePath: string) {
-    // 1. Extract cover from audio file
-    const metadata = await parseFile(audioFilePath);
-    const picture = metadata.common.picture?.[0];
+    // 1. First check for Cover.jpg or Cover.png in the album's folder
+    const albumDir = path.dirname(audioFilePath);
+    const coverCandidates = ['Cover.jpg', 'Cover.png', 'cover.jpg', 'cover.png', 'Folder.jpg', 'Folder.png'];
 
-    if (!picture) return null;
+    let imageBuffer: Buffer | null = null;
+
+    // Try to find a cover file in the album directory
+    for (const coverName of coverCandidates) {
+        const coverPath = path.join(albumDir, coverName);
+        if (fs.existsSync(coverPath)) {
+            imageBuffer = fs.readFileSync(coverPath);
+            break;
+        }
+    }
+
+    // If no cover file found, try to extract from audio files
+    if (!imageBuffer) {
+        // Try the provided audio file first
+        try {
+            const metadata = await parseFile(audioFilePath);
+            const picture = metadata.common.picture?.[0];
+            if (picture) {
+                imageBuffer = Buffer.from(picture.data);
+            }
+        } catch (e) {
+            // Files from wrapper might not have readable metadata
+        }
+
+        // If still no cover, try other audio files in the directory
+        if (!imageBuffer) {
+            const audioExtensions = ['.m4a', '.flac', '.mp3', '.aac', '.alac'];
+            const files = fs.readdirSync(albumDir);
+            for (const file of files) {
+                if (audioExtensions.some(ext => file.toLowerCase().endsWith(ext))) {
+                    const filePath = path.join(albumDir, file);
+                    if (filePath !== audioFilePath) {
+                        try {
+                            const metadata = await parseFile(filePath);
+                            const picture = metadata.common.picture?.[0];
+                            if (picture) {
+                                imageBuffer = Buffer.from(picture.data);
+                                break;
+                            }
+                        } catch (e) {
+                            // Continue to next file
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if (!imageBuffer) return null;
 
     // 2. Generate generic filenames
     // We use albumId to keep it unique and predictable
@@ -49,8 +97,8 @@ export async function generateCovers(albumId: string, audioFilePath: string) {
     const mediumPath = path.join(CACHE_DIR, mediumFilename);
     const largePath = path.join(CACHE_DIR, largeFilename);
 
+
     // 3. Process with Sharp
-    const imageBuffer = picture.data;
 
     // Parallel processing
     await Promise.all([
