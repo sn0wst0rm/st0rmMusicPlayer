@@ -11,6 +11,7 @@ import { Play, Pause, SkipBack, SkipForward, Volume2, Shuffle, ListVideo, Repeat
 import { cn } from "@/lib/utils"
 import { CodecSelector } from "@/components/codec-selector"
 import { isCodecSupportedInBrowser } from "@/lib/browser-codec-support"
+import { useRouter } from "next/navigation"
 
 export function Player() {
     const {
@@ -39,7 +40,10 @@ export function Player() {
         setCurrentCodec,
         fetchCodecsForTrack,
         queue,
+        navigateToArtist,
     } = usePlayerStore()
+
+    const router = useRouter()
 
     const audioRef = React.useRef<HTMLAudioElement>(null)
     const [progress, setProgress] = React.useState(0)
@@ -600,23 +604,19 @@ export function Player() {
                     <div className="truncate">
                         <div className="font-medium truncate text-sm">{currentTrack.title}</div>
                         <div className="text-xs text-muted-foreground truncate">
-                            {currentTrack.artist?.name || "Unknown Artist"} — <span
+                            <span
                                 className="hover:underline cursor-pointer hover:text-foreground transition-colors"
                                 onClick={() => {
-                                    // Find the album from library
-                                    if (!currentTrack.albumId) return
-                                    for (const artist of library) {
-                                        const album = artist.albums.find(a => a.id === currentTrack.albumId)
-                                        if (album) {
-                                            setSelectedAlbum({
-                                                id: album.id,
-                                                title: album.title,
-                                                tracks: album.tracks,
-                                                artistName: artist.name
-                                            })
-                                            return
-                                        }
+                                    if (currentTrack.artist?.name) {
+                                        navigateToArtist(currentTrack.artist.name)
+                                        router.push('/artists')
                                     }
+                                }}
+                            >{currentTrack.artist?.name || "Unknown Artist"}</span> — <span
+                                className="hover:underline cursor-pointer hover:text-foreground transition-colors"
+                                onClick={() => {
+                                    if (!currentTrack.albumId) return
+                                    router.push(`/album/${currentTrack.albumId}`)
                                 }}
                             >{currentTrack.album?.title || "Unknown Album"}</span>
                         </div>

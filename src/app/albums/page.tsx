@@ -147,9 +147,9 @@ export default function AlbumsPage() {
                         <RefreshCw className={cn("h-4 w-4", scanning ? 'animate-spin' : '', scanning ? 'mr-2' : 'sm:mr-2')} />
                         <span className={cn("hidden sm:inline", scanning && "inline")}>{scanning ? 'Scanning...' : 'Scan Library'}</span>
                     </Button>
-                    <Button size="sm" className="px-3 sm:px-4">
+                    <Button size="sm" className="px-3 sm:px-4" onClick={() => router.push('/import?focus=url')}>
                         <PlusCircle className="h-4 w-4 sm:mr-2" />
-                        <span className="hidden sm:inline">Add Folder</span>
+                        <span className="hidden sm:inline">Import Media...</span>
                     </Button>
                 </div>
             </div>

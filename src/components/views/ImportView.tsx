@@ -82,7 +82,11 @@ function ActiveDownloadsBadge() {
     )
 }
 
-export function ImportView() {
+interface ImportViewProps {
+    autoFocusUrl?: boolean
+}
+
+export function ImportView({ autoFocusUrl = false }: ImportViewProps) {
     const {
         gamdlServiceOnline,
         setGamdlServiceOnline,
@@ -96,6 +100,18 @@ export function ImportView() {
         updateDownloadItem,
         updateDownloadStats
     } = usePlayerStore()
+
+    const urlInputRef = useRef<HTMLInputElement>(null)
+
+    // Auto-focus URL input when navigating from "Import Media..." button
+    useEffect(() => {
+        if (autoFocusUrl && urlInputRef.current) {
+            // Small delay to ensure component is fully mounted
+            setTimeout(() => {
+                urlInputRef.current?.focus()
+            }, 100)
+        }
+    }, [autoFocusUrl])
 
     const [url, setUrl] = useState("")
     const [isValidating, setIsValidating] = useState(false)
@@ -332,7 +348,7 @@ export function ImportView() {
                     const queue = usePlayerStore.getState().downloadQueue
                     const item = queue.find(i => i.id === data.track_id)
                     if (item) {
-                        const updates: any = {
+                        const updates: Partial<{ progress: number; codecStatus: Record<string, 'pending' | 'downloading' | 'completed' | 'failed' | 'decrypting'>; codecProgress: Record<string, number> }> = {
                             progress: data.progress_pct
                         }
 
@@ -514,10 +530,10 @@ export function ImportView() {
                 // But existing logic uses it to show progress on the button.
             }, 3000)
 
-        } catch (err: any) {
+        } catch (err: unknown) {
             console.error('Download error:', err)
             setIsDownloading(false)
-            toast.error(err.message || 'Failed to start download')
+            toast.error(err instanceof Error ? err.message : 'Failed to start download')
         }
     }
 
@@ -641,12 +657,13 @@ export function ImportView() {
                         {gamdlServiceOnline ? "Service Online" : "Service Offline"}
                     </div>
                     <Button
-                        variant="ghost"
+                        variant="outline"
+                        size="icon"
                         className="relative"
                         onClick={() => setShowQueue(true)}
                         title="Download Queue"
                     >
-                        <Download className="h-5 w-5" />
+                        <Download className="h-4 w-4" />
                         {/* Badge for active downloads - using hook from component context */}
                         <ActiveDownloadsBadge />
                     </Button>
@@ -669,6 +686,7 @@ export function ImportView() {
                         <div className="relative">
                             <Link2 className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                             <Input
+                                ref={urlInputRef}
                                 placeholder="Paste Apple Music song, album, or playlist URL..."
                                 value={url}
                                 onChange={(e) => setUrl(e.target.value)}

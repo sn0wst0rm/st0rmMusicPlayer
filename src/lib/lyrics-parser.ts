@@ -429,7 +429,7 @@ export function parseTTML(content: string): ParsedLyrics {
 
     // Parse songwriters from metadata
     // Format: <songwriters><songwriter>Name</songwriter>...</songwriters>
-    let songwriters: string[] = []
+    const songwriters: string[] = []
     const songwritersMatch = content.match(/<songwriters>([\s\S]*?)<\/songwriters>/)
     if (songwritersMatch) {
         const songwriterRegex = /<songwriter>([^<]+)<\/songwriter>/g
