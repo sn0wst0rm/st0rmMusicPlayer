@@ -44,7 +44,7 @@ export async function GET(
     if (track.codecPaths) {
         try {
             codecPaths = JSON.parse(track.codecPaths) as Record<string, string>;
-        } catch (e) {
+        } catch {
             // Invalid JSON, treat as empty
         }
     }
@@ -101,15 +101,15 @@ export async function GET(
                 file.on('data', (chunk) => {
                     try {
                         controller.enqueue(chunk);
-                    } catch (e) {
+                    } catch {
                         file.destroy();
                     }
                 });
                 file.on('end', () => {
-                    try { controller.close(); } catch (e) { }
+                    try { controller.close(); } catch { /* stream already closed */ }
                 });
                 file.on('error', (err) => {
-                    try { controller.error(err); } catch (e) { }
+                    try { controller.error(err); } catch { /* stream already closed */ }
                 });
             },
             cancel() {
@@ -135,15 +135,15 @@ export async function GET(
             file.on('data', (chunk) => {
                 try {
                     controller.enqueue(chunk);
-                } catch (e) {
+                } catch {
                     file.destroy();
                 }
             });
             file.on('end', () => {
-                try { controller.close(); } catch (e) { }
+                try { controller.close(); } catch { /* stream already closed */ }
             });
             file.on('error', (err) => {
-                try { controller.error(err); } catch (e) { }
+                try { controller.error(err); } catch { /* stream already closed */ }
             });
         },
         cancel() {
