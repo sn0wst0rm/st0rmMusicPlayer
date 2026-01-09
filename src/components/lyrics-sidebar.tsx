@@ -5,7 +5,7 @@ import { memo, useCallback, useEffect, useRef, useState } from "react"
 import { usePlayerStore } from "@/lib/store"
 import { motion, AnimatePresence } from "motion/react"
 import { cn } from "@/lib/utils"
-import { Mic2, MessageSquare, Languages, Check } from "lucide-react"
+import { Mic2, Languages } from "lucide-react"
 import { DynamicGradientBackground } from "@/components/ui/dynamic-gradient-background"
 import { extractColorsFromImage, getAppleMusicFallbackColors } from "@/lib/color-extraction"
 import type { LyricsLine, LyricsWord, ParsedLyrics } from "@/lib/lyrics-parser"
@@ -199,7 +199,6 @@ const LyricsLineComponent = memo(function LyricsLineComponent({
             const syllables = word.syllables
             const wordStart = syllables[0].time
             const wordEnd = syllables[syllables.length - 1].endTime || (syllables[syllables.length - 1].time + 0.3)
-            const totalDuration = wordEnd - wordStart
 
             if (time < wordStart) {
                 return { overallProgress: 0, currentSyllableIdx: -1, syllableProgress: 0 }
@@ -249,7 +248,6 @@ const LyricsLineComponent = memo(function LyricsLineComponent({
                                 {word.syllables.map((syl, sylIdx) => {
                                     const isSylComplete = sylIdx < currentSyllableIdx
                                     const isSylActive = sylIdx === currentSyllableIdx
-                                    const isSylUpcoming = sylIdx > currentSyllableIdx
 
                                     // Calculate fill percentage for this syllable
                                     const fillPercent = isSylActive
@@ -541,9 +539,6 @@ const LyricsPlaceholder = memo(function LyricsPlaceholder({
     )
 })
 
-// Threshold in seconds to show breathing dots (instrumental pause)
-const PAUSE_THRESHOLD = 4.0
-
 // Helper to determine if color is light
 const isLightColor = (hex: string) => {
     if (!hex) return false
@@ -558,7 +553,6 @@ const isLightColor = (hex: string) => {
 // Lyrics panel content (separated for AnimatePresence)
 const LyricsPanelContent = memo(function LyricsPanelContent({
     gradientColors,
-    isPlaying: isPlayingProp
 }: {
     gradientColors: string[]
     isPlaying: boolean
