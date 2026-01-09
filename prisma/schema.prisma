@@ -142,7 +142,7 @@ model PlaylistTrack {
 model GamdlSettings {
     id                       String    @id @default("singleton")
     cookies                  String? // Netscape format cookies content
-    outputPath               String    @default("./music")
+    mediaLibraryPath         String    @default("./music")
     songCodecs               String    @default("aac-legacy") // Comma-separated list of codecs to download
     lyricsFormat             String    @default("ttml")
     coverSize                Int       @default(1200)

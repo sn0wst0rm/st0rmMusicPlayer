@@ -344,7 +344,7 @@ export async function GET(request: Request, { params }: RouteParams) {
                     body: JSON.stringify({
                         url: job.url,
                         cookies: settings.cookies,
-                        output_path: settings.outputPath,
+                        output_path: settings.mediaLibraryPath,
                         // Use job-specific codecs if provided, otherwise fall back to settings
                         song_codecs: job.selectedCodecs || settings.songCodecs || 'aac-legacy',
                         lyrics_format: settings.lyricsFormat,

@@ -43,7 +43,7 @@ interface ImportSettingsProps {
 }
 
 interface GamdlSettings {
-    outputPath: string
+    mediaLibraryPath: string
     songCodecs: string // Comma-separated list
     lyricsFormat: string
     coverSize: number
@@ -98,7 +98,7 @@ export function ImportSettings({ open, onOpenChange, onSettingsUpdate }: ImportS
             const updateData: Record<string, unknown> = {}
 
             if (settings) {
-                updateData.outputPath = settings.outputPath
+                updateData.mediaLibraryPath = settings.mediaLibraryPath
                 updateData.songCodecs = settings.songCodecs
                 updateData.lyricsFormat = settings.lyricsFormat
                 updateData.coverSize = settings.coverSize
@@ -245,8 +245,8 @@ export function ImportSettings({ open, onOpenChange, onSettingsUpdate }: ImportS
                     <div className="space-y-2">
                         <Label>Output Path</Label>
                         <Input
-                            value={settings.outputPath}
-                            onChange={(e) => setSettings({ ...settings, outputPath: e.target.value })}
+                            value={settings.mediaLibraryPath}
+                            onChange={(e) => setSettings({ ...settings, mediaLibraryPath: e.target.value })}
                             placeholder="./music"
                         />
                         <p className="text-xs text-muted-foreground">
@@ -594,7 +594,6 @@ export function ImportSettings({ open, onOpenChange, onSettingsUpdate }: ImportS
                     >
                         {isSaving ? (
                             <>
-                                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
                                 <Loader2 className="h-4 w-4 mr-2 animate-spin" />
                                 Saving...
                             </>

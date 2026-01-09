@@ -30,9 +30,8 @@ DOCKER_IMAGE = "wrapper"
 # Container name for managing lifecycle
 CONTAINER_NAME = "am-wrapper"
 
-# Media library root (hidden folder for wrapper data)
-LIBRARY_ROOT = Path("/media/sn0wst0rm/megaDrive/musica")
-WRAPPER_DATA_DIR = LIBRARY_ROOT / ".am-wrapper"
+# NOTE: Library path must be passed from caller (gamdl_service fetches from DB via Next.js API)
+# No hardcoded paths - all paths come from the database mediaLibraryPath setting
 
 
 class DockerWrapperManager:
@@ -46,13 +45,18 @@ class DockerWrapperManager:
         account_port: int = WRAPPER_ACCOUNT_PORT,
         auth_port: int = WRAPPER_AUTH_PORT,
         data_dir: Optional[Path] = None,
+        library_root: Optional[Path] = None,
     ):
+        if not library_root:
+            raise ValueError("library_root is required - must be fetched from database mediaLibraryPath setting")
+        # Resolve to absolute path - Docker requires absolute paths for volume mounts
+        self.library_root = library_root.resolve()
         self.host = host
         self.decrypt_port = decrypt_port
         self.m3u8_port = m3u8_port
         self.account_port = account_port
         self.auth_port = auth_port
-        self.data_dir = data_dir or WRAPPER_DATA_DIR
+        self.data_dir = (data_dir or (self.library_root / ".am-wrapper")).resolve()
         self._container_id: Optional[str] = None
         self._started = False
         self._auth_socket: Optional[socket.socket] = None
@@ -432,13 +436,34 @@ class DockerWrapperManager:
 
 # Module-level singleton
 _wrapper_manager: Optional[DockerWrapperManager] = None
+_library_root: Optional[Path] = None
+
+
+def init_wrapper_manager(library_root: Path) -> DockerWrapperManager:
+    """Initialize the wrapper manager with the library root path.
+    
+    This must be called before get_wrapper_manager() on first use.
+    The library_root should be fetched from the database mediaLibraryPath setting.
+    """
+    global _wrapper_manager, _library_root
+    _library_root = library_root
+    _wrapper_manager = DockerWrapperManager(library_root=library_root)
+    return _wrapper_manager
 
 
 def get_wrapper_manager() -> DockerWrapperManager:
-    """Get the singleton wrapper manager instance."""
+    """Get the singleton wrapper manager instance.
+    
+    Raises ValueError if init_wrapper_manager() was not called first.
+    """
     global _wrapper_manager
     if _wrapper_manager is None:
-        _wrapper_manager = DockerWrapperManager()
+        if _library_root is None:
+            raise ValueError(
+                "Wrapper manager not initialized. "
+                "Call init_wrapper_manager(library_root) first with the mediaLibraryPath from settings."
+            )
+        _wrapper_manager = DockerWrapperManager(library_root=_library_root)
     return _wrapper_manager
 
 

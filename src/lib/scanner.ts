@@ -4,11 +4,19 @@ import * as mm from 'music-metadata';
 import db from './db';
 import { glob } from 'glob';
 
-// Root directory for music (one level up from project)
-export const LIBRARY_ROOT = '/media/sn0wst0rm/megaDrive/musica';
 const IGNORE_DIRS = ['node_modules', '.git'];
 
+// Fetches the library path from database settings (source of truth)
+export async function getLibraryPath(): Promise<string> {
+    const settings = await db.gamdlSettings.findUnique({
+        where: { id: 'singleton' },
+        select: { mediaLibraryPath: true }
+    });
+    return settings?.mediaLibraryPath || './music';
+}
+
 export async function scanLibrary() {
+    const LIBRARY_ROOT = await getLibraryPath();
     console.log('Starting library scan from:', LIBRARY_ROOT);
 
     // Find all audio files

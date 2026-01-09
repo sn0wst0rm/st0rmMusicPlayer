@@ -50,7 +50,7 @@ export async function PUT(request: Request) {
         const body = await request.json();
         const {
             cookies,
-            outputPath,
+            mediaLibraryPath,
             songCodecs,
             lyricsFormat,
             coverSize,
@@ -68,7 +68,7 @@ export async function PUT(request: Request) {
         const updateData: Record<string, unknown> = {};
 
         if (cookies !== undefined) updateData.cookies = cookies;
-        if (outputPath !== undefined) updateData.outputPath = outputPath;
+        if (mediaLibraryPath !== undefined) updateData.mediaLibraryPath = mediaLibraryPath;
         if (songCodecs !== undefined) updateData.songCodecs = songCodecs;
         if (lyricsFormat !== undefined) updateData.lyricsFormat = lyricsFormat;
         if (coverSize !== undefined) updateData.coverSize = coverSize;

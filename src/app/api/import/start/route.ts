@@ -55,7 +55,7 @@ export async function POST(request: Request) {
                 body: JSON.stringify({
                     url: url,
                     cookies: settings.cookies,
-                    output_path: settings.outputPath || './music',
+                    output_path: settings.mediaLibraryPath || './music',
                     // Use selected codecs if provided, otherwise default to settings
                     song_codecs: (Array.isArray(selectedCodecs) && selectedCodecs.length > 0)
                         ? selectedCodecs.join(',')

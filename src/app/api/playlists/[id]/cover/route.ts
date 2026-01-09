@@ -11,9 +11,9 @@ interface RouteParams {
 async function getLibraryPath(): Promise<string> {
     const settings = await db.gamdlSettings.findUnique({
         where: { id: 'singleton' },
-        select: { outputPath: true }
+        select: { mediaLibraryPath: true }
     });
-    return settings?.outputPath || './music';
+    return settings?.mediaLibraryPath || './music';
 }
 
 // POST upload cover image for playlist

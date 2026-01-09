@@ -3,13 +3,16 @@ import path from 'path';
 import sharp from 'sharp';
 import { parseFile } from 'music-metadata';
 import prisma from '@/lib/db';
-import { LIBRARY_ROOT } from '@/lib/scanner';
+import { getLibraryPath } from '@/lib/scanner';
 
-const CACHE_DIR = path.join(LIBRARY_ROOT, '.cover-cache');
-
-// Ensure cache directory exists
-if (!fs.existsSync(CACHE_DIR)) {
-    fs.mkdirSync(CACHE_DIR, { recursive: true });
+// Cache directory for generated cover thumbnails - fetched lazily
+async function getCacheDir(): Promise<string> {
+    const libraryPath = await getLibraryPath();
+    const cacheDir = path.join(libraryPath, '.cover-cache');
+    if (!fs.existsSync(cacheDir)) {
+        fs.mkdirSync(cacheDir, { recursive: true });
+    }
+    return cacheDir;
 }
 
 export type CoverSize = 'small' | 'medium' | 'large';
@@ -93,9 +96,9 @@ export async function generateCovers(albumId: string, audioFilePath: string) {
     const mediumFilename = `${baseFilename}-medium.jpg`;
     const largeFilename = `${baseFilename}-large.jpg`;
 
-    const smallPath = path.join(CACHE_DIR, smallFilename);
-    const mediumPath = path.join(CACHE_DIR, mediumFilename);
-    const largePath = path.join(CACHE_DIR, largeFilename);
+    const smallPath = path.join(await getCacheDir(), smallFilename);
+    const mediumPath = path.join(await getCacheDir(), mediumFilename);
+    const largePath = path.join(await getCacheDir(), largeFilename);
 
 
     // 3. Process with Sharp

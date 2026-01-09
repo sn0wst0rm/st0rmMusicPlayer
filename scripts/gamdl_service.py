@@ -24,7 +24,7 @@ from apscheduler.triggers.interval import IntervalTrigger
 import websockets
 # Use websockets.serve directly to avoid deprecation warning
 from wrapper_downloader import WrapperSongDownloader
-from wrapper_manager import get_wrapper_manager, stop_wrapper
+from wrapper_manager import get_wrapper_manager, stop_wrapper, init_wrapper_manager
 
 # Global state
 active_downloads: dict = {}
@@ -897,7 +897,7 @@ async def download_tracks_for_sync(
         from gamdl.downloader.enums import CoverFormat
         
         # Get settings for output path and codec
-        cursor.execute("SELECT outputPath, songCodec, lyricsFormat FROM GamdlSettings WHERE id = 'singleton'")
+        cursor.execute("SELECT mediaLibraryPath, songCodec, lyricsFormat FROM GamdlSettings WHERE id = 'singleton'")
         settings_row = cursor.fetchone()
         
         if not settings_row or not settings_row[0]:
@@ -1173,7 +1173,7 @@ async def download_missing_codecs_for_sync(
         from gamdl.downloader.enums import CoverFormat
         
         # Get settings for output path
-        cursor.execute("SELECT outputPath FROM GamdlSettings WHERE id = 'singleton'")
+        cursor.execute("SELECT mediaLibraryPath FROM GamdlSettings WHERE id = 'singleton'")
         settings_row = cursor.fetchone()
         
         if not settings_row or not settings_row[0]:
@@ -1763,6 +1763,14 @@ async def prewarm_api():
             cookies = row[0]
             print("[PREWARM] Found cookies, initializing AppleMusicApi...", flush=True)
             
+            # Also fetch the library path for wrapper initialization
+            cursor2 = conn = sqlite3.connect(db_path)
+            cursor2 = conn.cursor()
+            cursor2.execute("SELECT mediaLibraryPath FROM GamdlSettings WHERE id = 'singleton'")
+            lib_row = cursor2.fetchone()
+            conn.close()
+            library_root = Path(lib_row[0]) if lib_row and lib_row[0] else Path("./music")
+            
             # Retry logic for timeout errors
             max_retries = 3
             api = None
@@ -1786,14 +1794,14 @@ async def prewarm_api():
             
             # Try to start wrapper after API is ready
             if api:
-                await start_wrapper_if_available(api)
+                await start_wrapper_if_available(api, library_root)
         else:
             print("[PREWARM] No cookies configured, skipping API pre-warm", flush=True)
     except Exception as e:
         print(f"[PREWARM] ⚠️ Pre-warm failed (non-critical): {e}", flush=True)
 
 
-async def start_wrapper_if_available(api):
+async def start_wrapper_if_available(api, library_root: Path):
     """
     Start the wrapper Docker container.
     
@@ -1801,10 +1809,17 @@ async def start_wrapper_if_available(api):
     headless mode for web-based authentication. No token extraction needed.
     
     ALAC/Atmos downloads require the wrapper. AAC-legacy works without it.
+    
+    Args:
+        api: The AppleMusicApi instance
+        library_root: Path to the media library (from database mediaLibraryPath setting)
     """
-    from wrapper_manager import get_wrapper_manager, check_wrapper_available
+    from wrapper_manager import get_wrapper_manager, check_wrapper_available, init_wrapper_manager
     
     try:
+        # Initialize wrapper manager with library root path
+        init_wrapper_manager(library_root)
+        
         # Check if Docker and wrapper image are available
         available, message = check_wrapper_available()
         if not available:
@@ -2757,12 +2772,26 @@ async def health_check():
 @app.post("/wrapper/start")
 async def start_wrapper_endpoint():
     """Manually start the wrapper Docker container."""
+    import sqlite3
+    import os
     from wrapper_manager import get_wrapper_manager
     
-    # Get tokens from cached API or settings
+    # Get library path from database
     try:
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        project_root = os.path.dirname(script_dir)
+        db_path = os.path.join(project_root, "library.db")
+        
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+        cursor.execute("SELECT mediaLibraryPath FROM GamdlSettings WHERE id = 'singleton'")
+        row = cursor.fetchone()
+        conn.close()
+        
+        library_root = Path(row[0]) if row and row[0] else Path("./music")
+        
         if _cached_api.get("api"):
-            result = await start_wrapper_if_available(_cached_api["api"])
+            result = await start_wrapper_if_available(_cached_api["api"], library_root)
             if result:
                 return {"success": True, "message": "Wrapper started successfully"}
             else:

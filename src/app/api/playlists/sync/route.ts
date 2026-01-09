@@ -134,7 +134,7 @@ export async function POST(request: Request) {
 
             for (const remoteTrack of tracksToAdd) {
                 // Check if track already exists in library by Apple Music ID
-                let existingTrack = await db.track.findFirst({
+                const existingTrack = await db.track.findFirst({
                     where: { appleMusicId: remoteTrack.appleMusicId }
                 });
 
