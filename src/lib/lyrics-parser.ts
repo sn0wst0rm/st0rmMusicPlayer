@@ -352,14 +352,9 @@ export function parseTTML(content: string): ParsedLyrics {
             const lineKey = textMatch[1] // e.g., "L61"
             const translatedText = textMatch[2].trim()
 
-            // Find the corresponding line by itunes:key
-            // We need to search the original content for the line with this key
-            const lineKeyPattern = new RegExp(`<p[^>]*itunes:key="${lineKey}"[^>]*>`)
-            const lineWithKey = lines.find((line, index) => {
-                // Match by position - line keys are typically L1, L2, etc.
-                const keyNum = parseInt(lineKey.replace('L', ''), 10)
-                return index === keyNum - 1
-            })
+            // Find the corresponding line by position - line keys are typically L1, L2, etc.
+            const keyNum = parseInt(lineKey.replace('L', ''), 10)
+            const lineWithKey = lines[keyNum - 1]
 
             if (lineWithKey) {
                 lineWithKey.translation = translatedText

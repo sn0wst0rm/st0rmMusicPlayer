@@ -4,7 +4,7 @@ import { spawn } from "child_process";
 export const dynamic = "force-dynamic";
 
 // Get wrapper status
-export async function GET(request: NextRequest) {
+export async function GET(_request: NextRequest) {
     return new Promise<NextResponse>((resolve) => {
         const proc = spawn("python3", [
             "-c",

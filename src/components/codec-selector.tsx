@@ -37,7 +37,7 @@ interface CodecSelectorProps {
 }
 
 export function CodecSelector({
-    trackId,
+    trackId: _trackId,
     currentCodec,
     availableCodecs,
     onCodecChange,

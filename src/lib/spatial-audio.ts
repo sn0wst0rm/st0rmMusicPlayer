@@ -19,8 +19,8 @@ export interface SpatialAudioState {
     orientation: { alpha: number; beta: number; gamma: number }
 }
 
-// Initial state
-const initialState: SpatialAudioState = {
+// Initial state export for consumers
+export const DEFAULT_SPATIAL_STATE: SpatialAudioState = {
     isSupported: false,
     isEnabled: false,
     headTrackingAvailable: false,
@@ -317,28 +317,28 @@ export class SpatialAudioRenderer {
         if (this.sourceNode) {
             try {
                 this.sourceNode.disconnect()
-            } catch (e) { /* ignore */ }
+            } catch { /* ignore */ }
             this.sourceNode = null
         }
 
         if (this.pannerNode) {
             try {
                 this.pannerNode.disconnect()
-            } catch (e) { /* ignore */ }
+            } catch { /* ignore */ }
             this.pannerNode = null
         }
 
         if (this.gainNode) {
             try {
                 this.gainNode.disconnect()
-            } catch (e) { /* ignore */ }
+            } catch { /* ignore */ }
             this.gainNode = null
         }
 
         if (this.audioContext) {
             try {
                 this.audioContext.close()
-            } catch (e) { /* ignore */ }
+            } catch { /* ignore */ }
             this.audioContext = null
         }
 

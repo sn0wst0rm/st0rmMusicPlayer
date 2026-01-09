@@ -30,7 +30,7 @@ export async function GET(
     if (track.codecPaths) {
         try {
             codecs = JSON.parse(track.codecPaths);
-        } catch (e) {
+        } catch {
             // Fallback: if codecPaths is invalid, use filePath with default codec
             codecs = { 'aac-legacy': track.filePath };
         }
@@ -83,7 +83,7 @@ export async function PATCH(
     if (track.codecPaths) {
         try {
             availableCodecs = Object.keys(JSON.parse(track.codecPaths));
-        } catch (e) {
+        } catch {
             availableCodecs = ['aac-legacy'];
         }
     }

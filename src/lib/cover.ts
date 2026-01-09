@@ -59,7 +59,7 @@ export async function generateCovers(albumId: string, audioFilePath: string) {
             if (picture) {
                 imageBuffer = Buffer.from(picture.data);
             }
-        } catch (e) {
+        } catch {
             // Files from wrapper might not have readable metadata
         }
 
@@ -78,7 +78,7 @@ export async function generateCovers(albumId: string, audioFilePath: string) {
                                 imageBuffer = Buffer.from(picture.data);
                                 break;
                             }
-                        } catch (e) {
+                        } catch {
                             // Continue to next file
                         }
                     }

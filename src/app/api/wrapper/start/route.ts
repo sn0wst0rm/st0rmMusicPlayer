@@ -4,7 +4,7 @@ import { spawn } from "child_process";
 export const dynamic = "force-dynamic";
 
 // Start wrapper container in headless mode
-export async function POST(request: NextRequest) {
+export async function POST(_request: NextRequest) {
     try {
         // Call Python script to start wrapper
         const result = await new Promise<{ success: boolean; error?: string }>(

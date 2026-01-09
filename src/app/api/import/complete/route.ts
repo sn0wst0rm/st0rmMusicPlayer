@@ -55,11 +55,12 @@ interface TrackCompleteEvent {
     metadata: TrackMetadata;
     current?: number;
     total?: number;
+    jobId?: string;
 }
 
 // Helper to upsert artist, album, track into database
 async function insertTrackToLibrary(event: TrackCompleteEvent): Promise<{ albumId: string; artistId: string; trackId: string }> {
-    const { filePath, lyricsPath, coverPath, metadata } = event;
+    const { filePath, lyricsPath, coverPath: _coverPath, metadata } = event;
 
     // 1. Resolve Artist
     const artistName = metadata.albumArtist || metadata.artist || 'Unknown Artist';
@@ -306,13 +307,14 @@ export async function POST(req: Request) {
 
         console.log(`[ImportComplete] Received completion for: ${body.metadata?.title}`);
 
-        const result = await insertTrackToLibrary(body as TrackCompleteEvent);
+        const trackEvent = body as TrackCompleteEvent;
+        const result = await insertTrackToLibrary(trackEvent);
 
         // Update Import Job status if jobId is provided
-        const jobId = (body as any).jobId;
+        const jobId = trackEvent.jobId;
         if (jobId) {
-            const current = (body as any).current || 1;
-            const total = (body as any).total || 1;
+            const current = trackEvent.current || 1;
+            const total = trackEvent.total || 1;
             const isFinished = current >= total;
 
             try {

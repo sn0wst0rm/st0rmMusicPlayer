@@ -60,7 +60,7 @@ function connectToPython(): void {
                 if (parsed.type === 'download_complete') {
                     console.log('[WS Proxy] download_complete received:', JSON.stringify(parsed.data?.metadata || 'NO METADATA', null, 2));
                 }
-            } catch (e) {
+            } catch {
                 // Ignore parse errors for logging
             }
 

@@ -21,6 +21,8 @@ const eslintConfig = defineConfig([
       // Disabled: We use <img> for dynamically served cover art from /api/cover/
       // which is already optimized via Sharp with size variants (small/medium/large)
       "@next/next/no-img-element": "off",
+      // Allow setState in effects for intentional patterns like modal reset, color extraction
+      "react-hooks/set-state-in-effect": "warn",
     },
   },
 ]);

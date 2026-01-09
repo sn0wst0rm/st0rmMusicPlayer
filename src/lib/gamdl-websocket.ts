@@ -4,7 +4,6 @@
  */
 
 type MessageHandler = (data: unknown) => void;
-type RequestHandler = (response: unknown) => void;
 
 interface PendingRequest {
     resolve: (value: unknown) => void;

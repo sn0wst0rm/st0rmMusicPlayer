@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { Virtuoso, VirtuosoHandle } from "react-virtuoso"
+import { VirtuosoHandle } from "react-virtuoso"
 import { Button } from "@/components/ui/button"
 import { RefreshCw, PlusCircle } from "lucide-react"
 import { cn } from "@/lib/utils"

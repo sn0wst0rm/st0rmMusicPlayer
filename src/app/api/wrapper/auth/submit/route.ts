@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { spawn } from "child_process";
 
 export const dynamic = "force-dynamic";
 
@@ -54,8 +55,6 @@ export async function POST(request: NextRequest) {
 async function sendToWrapper(
     data: Record<string, unknown>
 ): Promise<{ success: boolean; error?: string }> {
-    const { spawn } = require("child_process");
-
     return new Promise((resolve) => {
         const dataJson = JSON.stringify(data);
         const proc = spawn("python3", [

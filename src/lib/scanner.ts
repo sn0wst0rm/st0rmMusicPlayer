@@ -142,7 +142,7 @@ async function processFile(filePath: string) {
                 if (existingTrack.codecPaths) {
                     try {
                         codecPaths = JSON.parse(existingTrack.codecPaths);
-                    } catch (e) { /* ignore */ }
+                    } catch { /* ignore */ }
                 }
                 // Determine original codec
                 if (!codecPaths['aac-legacy']) {

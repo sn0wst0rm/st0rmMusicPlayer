@@ -1,4 +1,5 @@
 import { NextRequest } from "next/server";
+import { spawn } from "child_process";
 
 export const dynamic = "force-dynamic";
 
@@ -9,8 +10,6 @@ export async function GET(request: NextRequest) {
     const stream = new ReadableStream({
         async start(controller) {
             // Connect to wrapper auth socket and relay messages
-            const { spawn } = require("child_process");
-
             const proc = spawn("python3", [
                 "-c",
                 `

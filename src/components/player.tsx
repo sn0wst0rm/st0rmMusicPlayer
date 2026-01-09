@@ -1,7 +1,8 @@
 "use client"
 
 import * as React from "react"
-import { usePlayerStore } from "@/lib/store"
+import { usePlayerStore, Track } from "@/lib/store"
+import { Artist, Album } from "@/types/music"
 import { Slider } from "@/components/ui/slider"
 import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
@@ -32,14 +33,12 @@ export function Player() {
         lyricsOpen,
         toggleLyrics,
         library,
-        setSelectedAlbum,
         playbackProgress,
         setPlaybackProgress,
         currentCodec,
         availableCodecs,
         setCurrentCodec,
         fetchCodecsForTrack,
-        queue,
         navigateToArtist,
     } = usePlayerStore()
 
@@ -56,9 +55,6 @@ export function Player() {
     const [isCodecSwitching, setIsCodecSwitching] = React.useState(false)
     // Track which track+codec combo is validated to prevent loading unvalidated codecs
     const [validatedState, setValidatedState] = React.useState<{ trackId: string; codec: string } | null>(null)
-    const preloadAudioRef = React.useRef<HTMLAudioElement | null>(null)
-
-
 
     // Ref to track first render - skip track reset on initial mount for position restoration
     const isFirstRenderRef = React.useRef(true)
@@ -260,7 +256,7 @@ export function Player() {
                                 playbackRate: audioRef.current.playbackRate || 1,
                                 position: details.seekTime
                             })
-                        } catch (e) { /* ignore */ }
+                        } catch { /* ignore */ }
                     }
                 }
             })
@@ -292,7 +288,7 @@ export function Player() {
                             playbackRate: audioRef.current.playbackRate || 1,
                             position: currentTime
                         })
-                    } catch (e) {
+                    } catch {
                         // Ignore errors from invalid position state
                     }
                 }
@@ -714,8 +710,8 @@ function formatTime(seconds: number) {
 }
 
 function PlayerCoverImage({ currentTrack, library, isCoverLoaded, setIsCoverLoaded }: {
-    currentTrack: any,
-    library: any[],
+    currentTrack: Track | null,
+    library: Artist[],
     isCoverLoaded: boolean,
     setIsCoverLoaded: (loaded: boolean) => void
 }) {
@@ -723,17 +719,18 @@ function PlayerCoverImage({ currentTrack, library, isCoverLoaded, setIsCoverLoad
 
     // Compute paths
     const staticCoverPath = currentTrack?.id ? `/api/cover/${currentTrack.id}?size=small` : "";
+    const albumId = currentTrack?.albumId;
 
     const animatedCoverPath = React.useMemo(() => {
-        if (!currentTrack?.albumId) return null;
+        if (!albumId) return null;
         for (const artist of library) {
-            const album = artist.albums.find((a: any) => a.id === currentTrack.albumId);
+            const album = artist.albums.find((a: Album) => a.id === albumId);
             if (album?.animatedCoverPath) {
                 return album.animatedCoverPath;
             }
         }
         return null;
-    }, [library, currentTrack?.albumId]);
+    }, [library, albumId]);
 
     // Effect to handle loading strategy
     React.useEffect(() => {

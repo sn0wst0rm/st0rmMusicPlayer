@@ -375,7 +375,7 @@ export async function GET(request: Request, { params }: RouteParams) {
                 let buffer = '';
                 let tracksComplete = 0;
                 let totalTracks = 0;
-                const importedTrackIds: string[] = []; // Track IDs for playlist linking
+                const _importedTrackIds: string[] = []; // Track IDs for playlist linking (TODO: implement)
                 let playlistId: string | null = null;
 
                 // If this is a playlist import, create or find the playlist first

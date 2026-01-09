@@ -60,48 +60,8 @@ export function WrapperLoginModal({
     );
     const [eventSource, setEventSource] = useState<EventSource | null>(null);
 
-    // Reset state when modal opens
-    useEffect(() => {
-        if (open) {
-            setAuthState("connecting");
-            setError(null);
-            setDialogMessage(null);
-            setOtp("");
-
-            // Start wrapper and connect to auth stream
-            startWrapperAuth();
-        } else {
-            // Cleanup on close
-            if (eventSource) {
-                eventSource.close();
-                setEventSource(null);
-            }
-        }
-    }, [open]);
-
-    const startWrapperAuth = useCallback(async () => {
-        try {
-            // Use Next.js API proxy instead of direct Python call
-            const es = new EventSource("/api/wrapper/auth/stream");
-            setEventSource(es);
-
-            es.onmessage = (event) => {
-                const data = JSON.parse(event.data);
-                handleAuthMessage(data);
-            };
-
-            es.onerror = () => {
-                setError("Connection to wrapper lost");
-                setAuthState("error");
-                es.close();
-            };
-        } catch (e) {
-            setError(`Failed to connect: ${e}`);
-            setAuthState("error");
-        }
-    }, []);
-
-    const handleAuthMessage = (data: {
+    // Define handleAuthMessage first (used by startWrapperAuth)
+    const handleAuthMessage = useCallback((data: {
         type: string;
         [key: string]: unknown;
     }) => {
@@ -160,7 +120,49 @@ export function WrapperLoginModal({
                 setAuthState("error");
                 break;
         }
-    };
+    }, [onAuthSuccess, onOpenChange]);
+
+    // Define startWrapperAuth after handleAuthMessage (since it depends on it)
+    const startWrapperAuth = useCallback(async () => {
+        try {
+            // Use Next.js API proxy instead of direct Python call
+            const es = new EventSource("/api/wrapper/auth/stream");
+            setEventSource(es);
+
+            es.onmessage = (event) => {
+                const data = JSON.parse(event.data);
+                handleAuthMessage(data);
+            };
+
+            es.onerror = () => {
+                setError("Connection to wrapper lost");
+                setAuthState("error");
+                es.close();
+            };
+        } catch (e) {
+            setError(`Failed to connect: ${e}`);
+            setAuthState("error");
+        }
+    }, [handleAuthMessage]);
+
+    // Reset state when modal opens
+    useEffect(() => {
+        if (open) {
+            setAuthState("connecting");
+            setError(null);
+            setDialogMessage(null);
+            setOtp("");
+
+            // Start wrapper and connect to auth stream
+            startWrapperAuth();
+        } else {
+            // Cleanup on close
+            if (eventSource) {
+                eventSource.close();
+                setEventSource(null);
+            }
+        }
+    }, [open, eventSource, startWrapperAuth]);
 
     const handleSubmitCredentials = async () => {
         if (!email || !password) {
