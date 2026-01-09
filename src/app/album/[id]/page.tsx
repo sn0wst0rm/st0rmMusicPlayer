@@ -59,7 +59,8 @@ export default function AlbumPage() {
                         genre: album.genre ?? undefined,
                         releaseDate: album.releaseDate ?? undefined,
                         recordLabel: album.recordLabel ?? undefined,
-                        animatedCoverPath: album.animatedCoverPath ?? undefined
+                        // Use null to indicate "checked but no animated cover" vs undefined for "not yet checked"
+                        animatedCoverPath: album.animatedCoverPath ?? null
                     })
                     setLoading(false)
                     return
@@ -71,14 +72,15 @@ export default function AlbumPage() {
             router.push('/')
         }
 
-        // Only load if we don't have the right album OR if the current album data is incomplete (missing animated cover info)
-        // We check for undefined specifically, as null would mean "confirmed no animated cover"
-        if (!selectedAlbum || selectedAlbum.id !== albumId || selectedAlbum.animatedCoverPath === undefined) {
+        // Only load if we don't have the right album
+        // animatedCoverPath will be null (checked, no cover) or string (has cover) after first load
+        // undefined means we haven't loaded this album's data yet
+        if (!selectedAlbum || selectedAlbum.id !== albumId) {
             loadAlbum()
         } else {
             setLoading(false)
         }
-    }, [albumId, library, selectedAlbum, setSelectedAlbum, setLibrary, router])
+    }, [albumId, library, selectedAlbum?.id, setSelectedAlbum, setLibrary, router])
 
     const handleBack = () => {
         router.back()
