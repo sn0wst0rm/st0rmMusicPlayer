@@ -54,7 +54,7 @@ export interface SelectedAlbum {
     genre?: string
     releaseDate?: Date | string
     recordLabel?: string
-    animatedCoverPath?: string
+    animatedCoverPath?: string | null
 }
 
 export interface DownloadItem {
@@ -256,7 +256,8 @@ export const usePlayerStore = create<PlayerState>()(
                         originalQueue: [],
                         sessionHistory: [],
                         playbackHistory: newPlaybackHistory,
-                        isPlaying: true
+                        isPlaying: true,
+                        playbackProgress: 0
                     })
                     return
                 }
@@ -274,7 +275,8 @@ export const usePlayerStore = create<PlayerState>()(
                     playbackHistory: newPlaybackHistory,
                     queue: state.isShuffling ? [...upcomingItems].sort(() => Math.random() - 0.5) : upcomingItems,
                     originalQueue: upcomingItems,
-                    isPlaying: true
+                    isPlaying: true,
+                    playbackProgress: 0
                 })
             },
             nextTrack: () => {
@@ -284,7 +286,8 @@ export const usePlayerStore = create<PlayerState>()(
                         // Repeat one - just restart, DON'T add duplicate to history
                         set({
                             currentTrack: { ...state.currentTrack },
-                            isPlaying: true
+                            isPlaying: true,
+                            playbackProgress: 0
                         })
                         return
                     }
@@ -297,7 +300,8 @@ export const usePlayerStore = create<PlayerState>()(
                             // Single track on repeat all - just restart, don't duplicate history
                             set({
                                 currentTrack: { ...state.currentTrack },
-                                isPlaying: true
+                                isPlaying: true,
+                                playbackProgress: 0
                             })
                             return
                         }
@@ -317,7 +321,8 @@ export const usePlayerStore = create<PlayerState>()(
                                 originalQueue: get().isShuffling ? [...restItems].sort(() => Math.random() - 0.5) : restItems,
                                 sessionHistory: [],
                                 playbackHistory: newPlaybackHistory,
-                                isPlaying: true
+                                isPlaying: true,
+                                playbackProgress: 0
                             })
                             return
                         }
@@ -355,7 +360,8 @@ export const usePlayerStore = create<PlayerState>()(
                     originalQueue: newOriginalQueue,
                     sessionHistory: newSessionHistory,
                     playbackHistory: newPlaybackHistory,
-                    isPlaying: true
+                    isPlaying: true,
+                    playbackProgress: 0
                 })
             },
             prevTrack: () => {
@@ -377,7 +383,8 @@ export const usePlayerStore = create<PlayerState>()(
                     // Note: we don't add to playbackHistory on prev - it's already there
                     queue: newQueue,
                     originalQueue: newOriginalQueue,
-                    isPlaying: true
+                    isPlaying: true,
+                    playbackProgress: 0
                 })
             },
             addToQueue: (track) => set((state) => {

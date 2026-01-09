@@ -76,6 +76,8 @@ export function Player() {
         setDuration(0)
         // Reset saved progress tracking
         lastSavedProgressRef.current = 0
+        // Reset validated state - forces re-validation for new track
+        setValidatedState(null)
         // Stop and clear audio element to prevent old track from playing
         if (audioRef.current) {
             audioRef.current.pause()
@@ -83,10 +85,9 @@ export function Player() {
             audioRef.current.load() // Force element to reset
             audioRef.current.currentTime = 0
         }
-        // Don't need to reset validatedState - it's checked against current trackId
         // Reset hasRestored so we don't restore old position on new tracks
         hasRestoredRef.current = false
-    }, [currentTrack])
+    }, [currentTrack?.id])
 
     // Extract colors from cover art when track changes
     React.useEffect(() => {
@@ -99,7 +100,7 @@ export function Player() {
         extractColorsFromImage(coverUrl)
             .then(colors => setGradientColors(colors))
             .catch(() => setGradientColors(getAppleMusicFallbackColors()))
-    }, [currentTrack])
+    }, [currentTrack?.id])
 
     // Fetch available codecs when track changes
     React.useEffect(() => {
@@ -113,10 +114,19 @@ export function Player() {
     React.useEffect(() => {
         if (!currentTrack || availableCodecs.length === 0) return
 
-        // Skip if this exact combo is already validated
-        if (currentCodec && validatedState?.trackId === currentTrack.id &&
-            validatedState?.codec === currentCodec) {
-            return // Already validated
+        // Use ref to check if already validated - avoids infinite re-render loops
+        // since ref changes don't trigger effects
+        const alreadyValidated = validatedState?.trackId === currentTrack.id &&
+            validatedState?.codec && availableCodecs.includes(validatedState.codec)
+
+        if (alreadyValidated) {
+            // If codec matches what we have, nothing to do
+            if (validatedState.codec === currentCodec) {
+                return
+            }
+            // If validated codec differs from current, update current to match
+            setCurrentCodec(validatedState.codec)
+            return
         }
 
         // Get codec priority from store
@@ -144,6 +154,7 @@ export function Player() {
         }
 
         if (bestCodec) {
+            // Set validated state and codec together to avoid race conditions
             setValidatedState({ trackId: currentTrack.id, codec: bestCodec })
             if (bestCodec !== currentCodec) {
                 setCurrentCodec(bestCodec)
@@ -156,7 +167,8 @@ export function Player() {
                 })
             })
         }
-    }, [currentTrack?.id, currentCodec, availableCodecs, setCurrentCodec, validatedState])
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [currentTrack?.id, availableCodecs, setCurrentCodec])
 
 
     // Only control play/pause when codec is validated
@@ -200,7 +212,7 @@ export function Player() {
                 ]
             })
         }
-    }, [currentTrack])
+    }, [currentTrack?.id, currentTrack?.title, currentTrack?.artist?.name, currentTrack?.album?.title])
 
     React.useEffect(() => {
         if ("mediaSession" in navigator) {
@@ -368,18 +380,18 @@ export function Player() {
         return () => {
             window.removeEventListener('beforeunload', handleBeforeUnload)
         }
-    }, [currentTrack, setPlaybackProgress])
+    }, [currentTrack?.id, setPlaybackProgress])
 
     const handleEnded = () => {
         nextTrack()
     }
 
-    const handleSeek = (value: number[]) => {
-        if (audioRef.current) {
+    const handleSeek = React.useCallback((value: number[]) => {
+        if (audioRef.current && duration > 0) {
             audioRef.current.currentTime = value[0]
             setProgress(value[0])
         }
-    }
+    }, [duration])
 
     // Codec switching - updates audio source directly
     // This is for switching codec on the SAME track (preserves position)
@@ -653,10 +665,10 @@ export function Player() {
                             {formatTime(progress)}
                         </span>
                         <Slider
-                            value={[progress]}
-                            max={duration || 100}
+                            value={[Number.isFinite(progress) && Number.isFinite(duration) && duration > 0 ? Math.min(progress, duration) : 0]}
+                            max={Number.isFinite(duration) && duration > 0 ? duration : 1}
                             step={1}
-                            onValueChange={handleSeek}
+                            onValueChange={Number.isFinite(duration) && duration > 0 ? handleSeek : undefined}
                             className="w-full"
                         />
                         <span
