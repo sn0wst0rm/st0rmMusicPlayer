@@ -1,9 +1,8 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  typescript: {
-    ignoreBuildErrors: true,
-  },
+  // Empty turbopack config to acknowledge Next.js 16 Turbopack default
+  turbopack: {},
 };
 
 export default nextConfig;
