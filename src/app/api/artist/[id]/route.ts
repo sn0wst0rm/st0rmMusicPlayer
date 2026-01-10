@@ -24,6 +24,10 @@ export interface ArtistResponse {
     albums: ArtistAlbumItem[];
     singles: ArtistAlbumItem[];
     storefront: string;
+    // Hero media URLs (served from local storage)
+    hero_video_url?: string;
+    hero_static_url?: string;
+    profile_image_url?: string;
 }
 
 export async function GET(
@@ -78,6 +82,27 @@ export async function GET(
                 lastFetchedAt: new Date()
             }
         });
+
+        // Get local hero media paths from database
+        const localArtist = await db.artist.findFirst({
+            where: { appleMusicId: artistId },
+            select: {
+                heroAnimatedPath: true,
+                heroStaticPath: true,
+                profileImagePath: true
+            }
+        });
+
+        // Add hero URLs if local files exist
+        if (localArtist?.heroAnimatedPath) {
+            result.hero_video_url = `/api/artist-hero/${artistId}/hero-animated.mp4`;
+        }
+        if (localArtist?.heroStaticPath) {
+            result.hero_static_url = `/api/artist-hero/${artistId}/hero-static.jpg`;
+        }
+        if (localArtist?.profileImagePath) {
+            result.profile_image_url = `/api/artist-hero/${artistId}/profile.jpg`;
+        }
 
         return NextResponse.json(result);
     } catch (error) {

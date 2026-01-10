@@ -33,7 +33,7 @@ export interface ArtistData {
     // Hero media URLs
     hero_video_url?: string
     hero_static_url?: string
-    profile_video_url?: string
+    profile_image_url?: string
 }
 
 export default function ArtistPage() {
@@ -41,7 +41,7 @@ export default function ArtistPage() {
     const router = useRouter()
     const artistId = params.id as string
 
-    const { library, setLibrary, setCurrentView, setSelectedAlbum, playTrack } = usePlayerStore()
+    const { setLibrary, setCurrentView, setSelectedAlbum, playTrack } = usePlayerStore()
 
     const [loading, setLoading] = React.useState(true)
     const [fetchingMetadata, setFetchingMetadata] = React.useState(false)
@@ -55,19 +55,23 @@ export default function ArtistPage() {
     }, [setCurrentView])
 
     // Fetch artist data
+    // NOTE: We always fetch fresh library data to avoid race conditions caused by
+    // Zustand's library state not being persisted. In production, library starts empty
+    // and relying on the cached closure value can lead to stale data where appleMusicId
+    // appears null even though it exists in the database.
     React.useEffect(() => {
         const loadArtist = async () => {
-            // Find local artist
-            let currentLibrary = library
-            if (library.length === 0) {
-                try {
-                    const res = await fetch('/api/library')
-                    const data = await res.json()
-                    setLibrary(data)
-                    currentLibrary = data
-                } catch (err) {
-                    console.error("Failed to fetch library", err)
-                }
+            // Always fetch fresh library data to ensure we have the latest state
+            let currentLibrary: Artist[] = []
+            try {
+                const res = await fetch('/api/library')
+                const data = await res.json()
+                setLibrary(data)
+                currentLibrary = data
+            } catch (err) {
+                console.error("Failed to fetch library", err)
+                // Fall back to cached library state if fetch fails
+                currentLibrary = usePlayerStore.getState().library
             }
 
             // Try to find artist by appleMusicId first, then by internal id, then by name
@@ -112,7 +116,8 @@ export default function ArtistPage() {
         }
 
         loadArtist()
-    }, [artistId, library, setLibrary])
+        // eslint-disable-next-line react-hooks/exhaustive-deps -- library intentionally excluded to avoid race conditions
+    }, [artistId, setLibrary])
 
     const handleAlbumClick = (album: Album) => {
         const selectedAlbum: SelectedAlbum = {

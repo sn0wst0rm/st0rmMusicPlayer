@@ -18,6 +18,16 @@ export interface Artist {
     name: string
     appleMusicId?: string
     albums: Album[]
+    // Extended metadata
+    artworkUrl?: string | null
+    bio?: string | null
+    genre?: string | null
+    origin?: string | null
+    birthDate?: string | null
+    // Hero media paths (served via /api/artist-hero)
+    heroAnimatedPath?: string | null
+    heroStaticPath?: string | null
+    profileImagePath?: string | null
 }
 
 export interface Playlist {

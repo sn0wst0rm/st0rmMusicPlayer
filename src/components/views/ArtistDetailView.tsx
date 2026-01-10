@@ -35,7 +35,7 @@ export interface ArtistData {
     // Hero media URLs
     hero_video_url?: string
     hero_static_url?: string
-    profile_video_url?: string
+    profile_image_url?: string
 }
 
 interface ArtistDetailViewProps {
@@ -174,27 +174,58 @@ export function ArtistDetailView({
 }: ArtistDetailViewProps) {
     const [heroImageLoaded, setHeroImageLoaded] = React.useState(false)
     const [heroVideoLoaded, setHeroVideoLoaded] = React.useState(false)
+    const [heroVideoCanPlay, setHeroVideoCanPlay] = React.useState(false)
     const [profileImageLoaded, setProfileImageLoaded] = React.useState(false)
+    const videoRef = React.useRef<HTMLVideoElement>(null)
 
     const artistName = artistData?.name || localArtist?.name || "Unknown Artist"
-    const artworkUrl = artistData?.artwork_url
+    const artworkUrl = artistData?.artwork_url || localArtist?.artworkUrl
 
     // Fallback to first album cover if no artist artwork (only for profile pic)
     const firstAlbumTrackId = localArtist?.albums?.[0]?.tracks?.[0]?.id
     const fallbackArtworkUrl = firstAlbumTrackId ? `/api/cover/${firstAlbumTrackId}?size=large` : undefined
 
-    // Hero image: only use actual hero/artwork URLs, NOT fallback album cover
-    const heroStaticUrl = artistData?.hero_static_url || artworkUrl
-    const heroVideoUrl = artistData?.hero_video_url
+    // Construct hero URLs from local artist data if available
+    const localHeroVideoUrl = localArtist?.heroAnimatedPath && localArtist?.appleMusicId
+        ? `/api/artist-hero/${localArtist.appleMusicId}/hero-animated.mp4`
+        : undefined
+    const localHeroStaticUrl = localArtist?.heroStaticPath && localArtist?.appleMusicId
+        ? `/api/artist-hero/${localArtist.appleMusicId}/hero-static.jpg`
+        : undefined
+    const localProfileImageUrl = localArtist?.profileImagePath && localArtist?.appleMusicId
+        ? `/api/artist-hero/${localArtist.appleMusicId}/profile.jpg`
+        : undefined
 
-    // Profile image: only use fallback after metadata fetch is complete
-    // This prevents flashing the album cover before the real artwork loads
-    const profileImageUrl = artworkUrl || (!fetchingMetadata ? fallbackArtworkUrl : undefined)
+    // Hero image: prefer API response, fallback to local paths, then artwork URL
+    const heroStaticUrl = artistData?.hero_static_url || localHeroStaticUrl || artworkUrl
+    const heroVideoUrl = artistData?.hero_video_url || localHeroVideoUrl
+
+    // Profile image: prefer API, then local, then artwork, finally album cover fallback
+    // Only use fallback after metadata fetch is complete to prevent flashing
+    const profileImageUrl = artistData?.profile_image_url || localProfileImageUrl || artworkUrl || (!fetchingMetadata ? fallbackArtworkUrl : undefined)
+
+    // Debug logging for production issues
+    React.useEffect(() => {
+        console.log('[ArtistDetailView] Debug:', {
+            artistName,
+            hasArtistData: !!artistData,
+            hasLocalArtist: !!localArtist,
+            localArtistAppleMusicId: localArtist?.appleMusicId,
+            heroVideoUrl,
+            heroStaticUrl,
+            profileImageUrl,
+            artworkUrl,
+            fetchingMetadata,
+            localHeroAnimatedPath: localArtist?.heroAnimatedPath,
+            localHeroStaticPath: localArtist?.heroStaticPath,
+        })
+    }, [artistData, localArtist, artistName, heroVideoUrl, heroStaticUrl, profileImageUrl, artworkUrl, fetchingMetadata])
 
     // Reset loading states when URLs change
     React.useEffect(() => {
         setHeroImageLoaded(false)
         setHeroVideoLoaded(false)
+        setHeroVideoCanPlay(false)
     }, [heroStaticUrl, heroVideoUrl])
 
     React.useEffect(() => {
@@ -218,37 +249,57 @@ export function ArtistDetailView({
             )}
 
             {/* Hero Banner */}
-            <div className={cn(
-                "relative h-80 md:h-96 overflow-hidden bg-gradient-to-b from-primary/20 to-background",
-                !fetchingMetadata && "mt-14"
-            )}>
-                {/* Animated hero video (HLS stream) */}
+            <div
+                className={cn(
+                    "relative overflow-hidden bg-gradient-to-b from-primary/20 to-background",
+                    !fetchingMetadata && "mt-14"
+                )}
+                style={{ height: '24rem' }}
+            >
+                {/* Animated hero video - shown when video can play */}
                 {heroVideoUrl && (
                     <video
+                        ref={videoRef}
+                        src={heroVideoUrl}
                         autoPlay
                         loop
                         muted
                         playsInline
+                        preload="auto"
                         className={cn(
-                            "absolute inset-0 w-full h-full object-cover transition-opacity duration-500",
-                            heroVideoLoaded ? "opacity-60" : "opacity-0"
+                            "absolute inset-0 w-full h-full object-cover transition-opacity duration-300",
+                            heroVideoCanPlay ? "opacity-60" : "opacity-0"
                         )}
                         onLoadedData={() => setHeroVideoLoaded(true)}
-                    >
-                        <source src={heroVideoUrl} type="video/mp4" />
-                    </video>
+                        onCanPlayThrough={() => {
+                            // Try to play when video is ready
+                            videoRef.current?.play().then(() => {
+                                setHeroVideoCanPlay(true)
+                            }).catch(() => {
+                                // Autoplay blocked - will show static fallback
+                                setHeroVideoCanPlay(false)
+                            })
+                        }}
+                        onPlay={() => setHeroVideoCanPlay(true)}
+                        onError={() => {
+                            setHeroVideoLoaded(false)
+                            setHeroVideoCanPlay(false)
+                        }}
+                    />
                 )}
 
-                {/* Static hero image (fallback or if no video) */}
-                {heroStaticUrl && !heroVideoLoaded && (
+                {/* Static hero image - shown as fallback when video is not playing */}
+                {heroStaticUrl && (
                     <img
                         src={heroStaticUrl}
                         alt=""
                         className={cn(
-                            "absolute inset-0 w-full h-full object-cover transition-opacity duration-500",
-                            heroImageLoaded ? "opacity-60" : "opacity-0"
+                            "absolute inset-0 w-full h-full object-cover transition-opacity duration-300",
+                            // Hide static image when video is playing to prevent overlap
+                            heroVideoCanPlay ? "opacity-0" : "opacity-60"
                         )}
                         onLoad={() => setHeroImageLoaded(true)}
+                        onError={() => setHeroImageLoaded(false)}
                     />
                 )}
 
@@ -257,29 +308,39 @@ export function ArtistDetailView({
 
                 {/* Content container */}
                 <div className="absolute bottom-0 left-0 right-0 p-8 flex items-end gap-6">
-                    {/* Artist profile image */}
-                    {profileImageUrl ? (
-                        <div className="w-36 h-36 md:w-48 md:h-48 rounded-full overflow-hidden shadow-2xl flex-shrink-0 ring-4 ring-background/50">
-                            <img
-                                src={profileImageUrl}
-                                alt={artistName}
-                                className={cn(
-                                    "w-full h-full object-cover transition-opacity duration-300",
-                                    profileImageLoaded ? "opacity-100" : "opacity-0"
+                    {/* Artist profile image - always show container with fallback */}
+                    <div
+                        className="relative rounded-full overflow-hidden shadow-2xl flex-shrink-0 ring-4 ring-background/50 bg-gradient-to-br from-primary/30 to-primary/10"
+                        style={{ width: '12rem', height: '12rem' }}
+                    >
+                        {profileImageUrl ? (
+                            <>
+                                <img
+                                    src={profileImageUrl}
+                                    alt={artistName}
+                                    className={cn(
+                                        "w-full h-full object-cover transition-opacity duration-300",
+                                        profileImageLoaded ? "opacity-100" : "opacity-0"
+                                    )}
+                                    onLoad={() => setProfileImageLoaded(true)}
+                                    onError={() => setProfileImageLoaded(false)}
+                                />
+                                {!profileImageLoaded && (
+                                    <div className="absolute inset-0 flex items-center justify-center">
+                                        <span className="text-6xl font-bold text-primary/50">
+                                            {artistName.charAt(0).toUpperCase()}
+                                        </span>
+                                    </div>
                                 )}
-                                onLoad={() => setProfileImageLoaded(true)}
-                            />
-                            {!profileImageLoaded && (
-                                <Skeleton className="w-full h-full" />
-                            )}
-                        </div>
-                    ) : (
-                        <div className="w-36 h-36 md:w-48 md:h-48 rounded-full overflow-hidden shadow-2xl flex-shrink-0 bg-gradient-to-br from-primary/30 to-primary/10 flex items-center justify-center ring-4 ring-background/50">
-                            <span className="text-6xl font-bold text-primary/50">
-                                {artistName.charAt(0).toUpperCase()}
-                            </span>
-                        </div>
-                    )}
+                            </>
+                        ) : (
+                            <div className="w-full h-full flex items-center justify-center">
+                                <span className="text-6xl font-bold text-primary/50">
+                                    {artistName.charAt(0).toUpperCase()}
+                                </span>
+                            </div>
+                        )}
+                    </div>
 
                     {/* Artist info */}
                     <div className="flex flex-col gap-2 min-w-0">
