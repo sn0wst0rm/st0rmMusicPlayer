@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { usePlayerStore } from "@/lib/store"
+import { usePlayerStore, DownloadItem } from "@/lib/store"
 
 /**
  * DownloadManager - Handles global WebSocket connection for download progress tracking.
@@ -48,7 +48,7 @@ export function DownloadManager() {
                     const uniqueId = `${data.track_id}-${Date.now()}`
 
                     // Initialize codec status for all expected codecs
-                    const codecStatus: Record<string, string> = {}
+                    const codecStatus: Record<string, 'pending' | 'downloading' | 'decrypting' | 'completed' | 'failed'> = {}
                     const codecProgress: Record<string, number> = {}
                     const codecTotalBytes: Record<string, number> = {}
                     const codecLoadedBytes: Record<string, number> = {}
@@ -92,7 +92,7 @@ export function DownloadManager() {
                     // Find the most recent downloading item for this track
                     const item = queue.find(i => i.trackId === data.track_id && i.status === 'downloading')
                     if (item) {
-                        const updates: Record<string, unknown> = {}
+                        const updates: Partial<DownloadItem> = {}
                         // Ensure all codecs are initialized if provided in progress event (for late joiners)
                         if (data.codecs && Array.isArray(data.codecs)) {
                             const updatedCodecStatus = { ...item.codecStatus }
@@ -178,7 +178,7 @@ export function DownloadManager() {
                 else if (type === 'download_codec_started') {
                     const item = usePlayerStore.getState().downloadQueue.find(i => i.trackId === data.track_id && i.status === 'downloading')
                     if (item && data.codec) {
-                        const updates: Record<string, unknown> = {}
+                        const updates: Partial<DownloadItem> = {}
                         updates.codecStatus = { ...item.codecStatus, [data.codec]: 'downloading' }
                         updateDownloadItem(item.id, updates)
                     }
@@ -186,7 +186,7 @@ export function DownloadManager() {
                 else if (type === 'download_codec_complete') {
                     const item = usePlayerStore.getState().downloadQueue.find(i => i.trackId === data.track_id && i.status === 'downloading')
                     if (item && data.codec) {
-                        const updates: Record<string, unknown> = {}
+                        const updates: Partial<DownloadItem> = {}
                         updates.codecStatus = { ...item.codecStatus, [data.codec]: data.success ? 'completed' : 'failed' }
                         updates.codecProgress = { ...item.codecProgress, [data.codec]: 100 }
 
