@@ -482,6 +482,46 @@ class AppleMusicApi:
 
         return webplayback
 
+    async def get_library_webplayback(
+        self,
+        library_id: str,
+    ) -> dict | None:
+        """
+        Get playback info for a private/uploaded library track.
+        
+        Unlike catalog tracks which use salableAdamId and return DRM-encrypted HLS streams,
+        library tracks use universalLibraryId and return direct unencrypted blobstore URLs.
+        
+        Args:
+            library_id: Library track ID starting with 'i.' (e.g., 'i.KoJEDdbIYKQDzA')
+            
+        Returns:
+            Dict with songList containing assets[].URL (direct download link),
+            metadata, and artworkURL. Returns None if track not found.
+        """
+        response = await self.client.post(
+            WEBPLAYBACK_API_URL,
+            headers={
+                "x-apple-music-user-token": self.media_user_token,
+            },
+            json={
+                "universalLibraryId": library_id,
+                "language": self.language,
+            },
+        )
+        
+        if response.status_code == 404:
+            return None
+        raise_for_status(response)
+
+        webplayback = safe_json(response)
+        if not "songList" in webplayback:
+            logger.warning(f"No songList in library webplayback response for {library_id}")
+            return None
+        logger.debug(f"Library Webplayback: {webplayback}")
+
+        return webplayback
+
     async def get_license_exchange(
         self,
         track_id: str,
