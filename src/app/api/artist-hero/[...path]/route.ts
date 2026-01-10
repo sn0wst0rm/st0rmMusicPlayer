@@ -66,8 +66,9 @@ export async function GET(
             return new NextResponse("File not found", { status: 404 })
         }
 
-        // Read and serve the file
-        const fileBuffer = fs.readFileSync(filePath)
+        // Get file stats for size
+        const stat = fs.statSync(filePath)
+        const fileSize = stat.size
 
         // Determine content type
         const ext = path.extname(filePath).toLowerCase()
@@ -81,9 +82,45 @@ export async function GET(
             contentType = "image/png"
         }
 
+        // Check for Range header (Safari and other browsers use this for video streaming)
+        const range = req.headers.get("range")
+
+        if (range && ext === ".mp4") {
+            // Parse range header (e.g., "bytes=0-1023")
+            const parts = range.replace(/bytes=/, "").split("-")
+            const start = parseInt(parts[0], 10)
+            const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1
+            const chunkSize = end - start + 1
+
+            // Create read stream for the requested range
+            const fileStream = fs.createReadStream(filePath, { start, end })
+            const chunks: Buffer[] = []
+
+            for await (const chunk of fileStream) {
+                chunks.push(Buffer.from(chunk))
+            }
+            const buffer = Buffer.concat(chunks)
+
+            return new NextResponse(buffer, {
+                status: 206,
+                headers: {
+                    "Content-Type": contentType,
+                    "Content-Length": chunkSize.toString(),
+                    "Content-Range": `bytes ${start}-${end}/${fileSize}`,
+                    "Accept-Ranges": "bytes",
+                    "Cache-Control": "public, max-age=604800",
+                },
+            })
+        }
+
+        // No range request - return full file
+        const fileBuffer = fs.readFileSync(filePath)
+
         return new NextResponse(fileBuffer, {
             headers: {
                 "Content-Type": contentType,
+                "Content-Length": fileSize.toString(),
+                "Accept-Ranges": "bytes",
                 "Cache-Control": "public, max-age=604800", // Cache for 1 week
             },
         })

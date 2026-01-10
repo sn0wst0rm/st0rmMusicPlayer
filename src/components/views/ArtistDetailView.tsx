@@ -232,6 +232,47 @@ export function ArtistDetailView({
         setProfileImageLoaded(false)
     }, [profileImageUrl])
 
+    // Safari autoplay workaround: Try playing video on mount and user interaction
+    React.useEffect(() => {
+        const video = videoRef.current
+        if (!video || !heroVideoUrl) return
+
+        let hasPlayed = false
+
+        const attemptPlay = async () => {
+            if (hasPlayed) return
+            try {
+                await video.play()
+                hasPlayed = true
+                setHeroVideoCanPlay(true)
+            } catch {
+                // Autoplay blocked - will try on user interaction
+                console.log('[ArtistDetailView] Autoplay blocked, waiting for user interaction')
+            }
+        }
+
+        // Try to play immediately (works in Chrome/Firefox, may fail in Safari)
+        attemptPlay()
+
+        // Safari workaround: Also try playing on first user interaction
+        const handleInteraction = () => {
+            if (!hasPlayed) {
+                attemptPlay()
+            }
+        }
+
+        // Listen for various user interactions
+        document.addEventListener('scroll', handleInteraction, { once: true, passive: true })
+        document.addEventListener('click', handleInteraction, { once: true })
+        document.addEventListener('touchstart', handleInteraction, { once: true, passive: true })
+
+        return () => {
+            document.removeEventListener('scroll', handleInteraction)
+            document.removeEventListener('click', handleInteraction)
+            document.removeEventListener('touchstart', handleInteraction)
+        }
+    }, [heroVideoUrl])
+
     const localAlbums = localArtist?.albums || []
     const catalogAlbums = artistData?.albums || []
     const catalogSingles = artistData?.singles || []
@@ -251,10 +292,13 @@ export function ArtistDetailView({
             {/* Hero Banner */}
             <div
                 className={cn(
-                    "relative overflow-hidden bg-gradient-to-b from-primary/20 to-background",
+                    "relative overflow-hidden",
                     !fetchingMetadata && "mt-14"
                 )}
-                style={{ height: '24rem' }}
+                style={{
+                    height: '24rem',
+                    background: 'linear-gradient(to bottom, hsl(var(--primary) / 0.2) 0%, hsl(var(--background)) 100%)'
+                }}
             >
                 {/* Animated hero video - shown when video can play */}
                 {heroVideoUrl && (
@@ -271,15 +315,6 @@ export function ArtistDetailView({
                             heroVideoCanPlay ? "opacity-60" : "opacity-0"
                         )}
                         onLoadedData={() => setHeroVideoLoaded(true)}
-                        onCanPlayThrough={() => {
-                            // Try to play when video is ready
-                            videoRef.current?.play().then(() => {
-                                setHeroVideoCanPlay(true)
-                            }).catch(() => {
-                                // Autoplay blocked - will show static fallback
-                                setHeroVideoCanPlay(false)
-                            })
-                        }}
                         onPlay={() => setHeroVideoCanPlay(true)}
                         onError={() => {
                             setHeroVideoLoaded(false)
@@ -304,7 +339,12 @@ export function ArtistDetailView({
                 )}
 
                 {/* Gradient overlay for readability */}
-                <div className="absolute inset-0 bg-gradient-to-t from-background via-background/50 to-transparent" />
+                <div
+                    className="absolute inset-0"
+                    style={{
+                        background: 'linear-gradient(to top, hsl(var(--background)) 0%, hsl(var(--background) / 0.5) 50%, transparent 100%)'
+                    }}
+                />
 
                 {/* Content container */}
                 <div className="absolute bottom-0 left-0 right-0 p-8 flex items-end gap-6">
