@@ -26,8 +26,11 @@ import {
     Link2,
     RefreshCw,
     Trash2,
-    Layers
+    Layers,
+    Search,
+    ChevronLeft
 } from "lucide-react"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/animate-ui/components/radix/tabs"
 import { cn } from "@/lib/utils"
 import { ImportSettings } from "./ImportSettings"
 import { SyncStatus } from "./SyncStatus"
@@ -67,6 +70,24 @@ interface ImportJob {
     importedArtistId?: string
     importedPlaylistId?: string
     createdAt: string
+}
+
+interface SearchResultItem {
+    type: 'song' | 'album'
+    apple_music_id: string
+    title: string
+    artist?: string
+    artwork_url?: string
+    track_count?: number
+    album_name?: string
+    duration_ms?: number
+}
+
+interface SearchResults {
+    songs: SearchResultItem[]
+    albums: SearchResultItem[]
+    term: string
+    storefront: string
 }
 
 // Separate component to properly use the hook and avoid hydration errors
@@ -133,8 +154,18 @@ export function ImportView({ autoFocusUrl = false }: ImportViewProps) {
     const [selectedCodecs, setSelectedCodecs] = useState<string[]>([])
     const [defaultCodecs, setDefaultCodecs] = useState<string[]>(['aac-legacy'])
 
+    // Search state
+    const [searchResults, setSearchResults] = useState<SearchResults | null>(null)
+    const [isSearching, setIsSearching] = useState(false)
+    const [selectedSearchItem, setSelectedSearchItem] = useState<SearchResultItem | null>(null)
+
     // Ref to track currentJobId for WebSocket handler (avoids stale closure)
     const jobIdRef = useRef<string | null>(null)
+
+    // Detect if input is a URL or search query
+    const isAppleMusicUrl = useCallback((input: string) => {
+        return input.includes('music.apple.com')
+    }, [])
 
     // Check service health on mount
     const checkServiceHealth = useCallback(async () => {
@@ -193,23 +224,21 @@ export function ImportView({ autoFocusUrl = false }: ImportViewProps) {
         // Clear previous results immediately when URL changes
         setValidationResult(null)
         setBatchResults([])
+        setSearchResults(null)
+        setSelectedSearchItem(null)
 
         if (!url || url.length < 10) {
             return
         }
 
-        // Debounce validation
-        const timeout = setTimeout(async () => {
-            if (!url.includes('music.apple.com')) {
-                setValidationResult({
-                    valid: false,
-                    type: 'unknown',
-                    title: '',
-                    error: 'Please enter a valid Apple Music URL'
-                })
-                return
-            }
+        // Only auto-validate if it looks like an Apple Music URL
+        // For search queries, user must press Enter or click Search button
+        if (!isAppleMusicUrl(url)) {
+            return
+        }
 
+        // Debounce validation for URLs only
+        const timeout = setTimeout(async () => {
             setIsValidating(true)
             try {
                 // Use batch validation to detect multiple URLs
@@ -277,7 +306,7 @@ export function ImportView({ autoFocusUrl = false }: ImportViewProps) {
         }, 500)
 
         return () => clearTimeout(timeout)
-    }, [url])
+    }, [url, isAppleMusicUrl])
 
     // WebSocket handler to replace SSE
     // WebSocket handler to replace SSE
@@ -459,6 +488,115 @@ export function ImportView({ autoFocusUrl = false }: ImportViewProps) {
         }
 
     }, []) // Run once on mount to persistent connection
+
+    // Handle search - triggered by Enter or button click
+    const handleSearch = useCallback(async () => {
+        if (!url || url.length < 2 || isAppleMusicUrl(url)) return
+
+        setIsSearching(true)
+        setSearchResults(null)
+        setSelectedSearchItem(null)
+        setValidationResult(null)
+        setBatchResults([])
+
+        try {
+            const res = await fetch('/api/import/search', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ term: url })
+            })
+
+            if (!res.ok) {
+                const error = await res.json()
+                toast.error('Search failed', { description: error.error })
+                return
+            }
+
+            const results: SearchResults = await res.json()
+            setSearchResults(results)
+
+        } catch (err) {
+            console.error('Search error:', err)
+            toast.error('Search failed')
+        } finally {
+            setIsSearching(false)
+        }
+    }, [url, isAppleMusicUrl])
+
+    // Handle search result click - validate to get codec info
+    const handleSearchResultClick = useCallback(async (item: SearchResultItem) => {
+        setSelectedSearchItem(item)
+        setIsValidating(true)
+
+        try {
+            // Build URL for validation using the storefront from search results
+            // Note: URL parser expects a slug between type and ID, so we add a placeholder '_'
+            const storefront = searchResults?.storefront || 'us'
+            const itemUrl = item.type === 'song'
+                ? `https://music.apple.com/${storefront}/song/_/${item.apple_music_id}`
+                : `https://music.apple.com/${storefront}/album/_/${item.apple_music_id}`
+
+            // Use existing validation endpoint to get codec info
+            const res = await fetch('/api/import/validate-batch', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ text: itemUrl })
+            })
+
+            if (!res.ok) {
+                throw new Error(`Validation failed: ${res.status}`)
+            }
+
+            const result = await res.json()
+
+            if (result.items && result.items.length > 0) {
+                const validatedItem = result.items[0]
+                setValidationResult(validatedItem)
+
+                // Initialize codec selection (same logic as existing URL validation)
+                if (validatedItem.type === 'song' && validatedItem.available_codecs?.length) {
+                    const available = new Set(validatedItem.available_codecs)
+                    const downloaded = new Set(validatedItem.downloaded_codecs || [])
+                    const initialSelection = defaultCodecs.filter(c => available.has(c) && !downloaded.has(c))
+
+                    if (initialSelection.length > 0) {
+                        setSelectedCodecs(initialSelection)
+                    } else {
+                        const firstNotDownloaded = validatedItem.available_codecs.find((c: string) => !downloaded.has(c))
+                        setSelectedCodecs(firstNotDownloaded ? [firstNotDownloaded] : [])
+                    }
+                } else if (validatedItem.type === 'album') {
+                    setSelectedCodecs(defaultCodecs.length > 0 ? [...defaultCodecs] : ['aac-legacy'])
+                }
+            } else {
+                // No items returned - show error and go back to search results
+                toast.error('Could not fetch track details', { description: 'The content may not be available in your region' })
+                setSelectedSearchItem(null)
+            }
+        } catch (err) {
+            console.error('Validation error:', err)
+            toast.error('Failed to get track details')
+            setSelectedSearchItem(null)
+        } finally {
+            setIsValidating(false)
+        }
+    }, [defaultCodecs, searchResults])
+
+    // Clear search results when going back
+    const handleBackFromPreview = useCallback(() => {
+        setSelectedSearchItem(null)
+        setValidationResult(null)
+        setSelectedCodecs([])
+    }, [])
+
+    // Format duration helper
+    const formatDuration = (ms: number): string => {
+        if (!ms) return "0:00"
+        const seconds = Math.floor(ms / 1000)
+        const m = Math.floor(seconds / 60)
+        const s = seconds % 60
+        return `${m}:${s.toString().padStart(2, '0')}`
+    }
 
     const handleDownload = async () => {
         if (!validationResult?.valid || !url) return
@@ -682,21 +820,48 @@ export function ImportView({ autoFocusUrl = false }: ImportViewProps) {
                 {/* URL Input */}
                 <div className="max-w-2xl mx-auto space-y-6">
                     <div className="space-y-2">
-                        <label className="text-sm font-medium">Apple Music URL</label>
+                        <label className="text-sm font-medium">Apple Music URL or Search</label>
                         <div className="relative">
-                            <Link2 className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                            {isAppleMusicUrl(url) ? (
+                                <Link2 className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                            ) : (
+                                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                            )}
                             <Input
                                 ref={urlInputRef}
-                                placeholder="Paste Apple Music song, album, or playlist URL..."
+                                placeholder="Paste Apple Music URL or search by name..."
                                 value={url}
                                 onChange={(e) => setUrl(e.target.value)}
-                                className="pl-10 pr-10"
+                                onKeyDown={(e) => {
+                                    if (e.key === 'Enter' && url && !isAppleMusicUrl(url)) {
+                                        e.preventDefault()
+                                        handleSearch()
+                                    }
+                                }}
+                                className="pl-10 pr-16"
                                 disabled={isDownloading}
                             />
-                            {isValidating && (
+                            {/* Search button - show when input is not a URL */}
+                            {!isAppleMusicUrl(url) && url.length >= 2 && (
+                                <Button
+                                    size="sm"
+                                    variant="ghost"
+                                    className="absolute right-1 top-1/2 -translate-y-1/2 h-7 px-2"
+                                    onClick={handleSearch}
+                                    disabled={isSearching || isDownloading}
+                                >
+                                    {isSearching ? (
+                                        <Loader2 className="h-4 w-4 animate-spin" />
+                                    ) : (
+                                        <Search className="h-4 w-4" />
+                                    )}
+                                </Button>
+                            )}
+                            {/* Status icons for URL validation */}
+                            {isAppleMusicUrl(url) && isValidating && (
                                 <Loader2 className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 animate-spin text-muted-foreground" />
                             )}
-                            {!isValidating && (validationResult || batchResults.length > 0) && (
+                            {isAppleMusicUrl(url) && !isValidating && (validationResult || batchResults.length > 0) && (
                                 (validationResult?.valid || batchResults.length > 0) ? (
                                     <CheckCircle2 className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 text-green-500" />
                                 ) : (
@@ -708,6 +873,140 @@ export function ImportView({ autoFocusUrl = false }: ImportViewProps) {
                             <p className="text-sm text-red-500">{validationResult.error}</p>
                         )}
                     </div>
+
+                    {/* Search Results - Show when we have search results and no selected item */}
+                    {searchResults && !selectedSearchItem && !validationResult && (
+                        <div className="space-y-4">
+                            <div className="flex items-center justify-between">
+                                <p className="text-sm font-medium text-muted-foreground">
+                                    Results for &quot;{searchResults.term}&quot;
+                                </p>
+                            </div>
+
+                            <Tabs defaultValue="albums" className="w-full">
+                                <TabsList className="grid w-full grid-cols-2">
+                                    <TabsTrigger value="albums">
+                                        Albums ({searchResults.albums.length})
+                                    </TabsTrigger>
+                                    <TabsTrigger value="songs">
+                                        Songs ({searchResults.songs.length})
+                                    </TabsTrigger>
+                                </TabsList>
+
+                                <TabsContent value="albums" className="mt-4">
+                                    {searchResults.albums.length === 0 ? (
+                                        <p className="text-sm text-muted-foreground text-center py-4">
+                                            No albums found
+                                        </p>
+                                    ) : (
+                                        <div className="grid grid-cols-2 md:grid-cols-3 gap-3 max-h-80 overflow-y-auto">
+                                            {searchResults.albums.map((album) => (
+                                                <button
+                                                    key={album.apple_music_id}
+                                                    onClick={() => handleSearchResultClick(album)}
+                                                    className="flex flex-col items-center gap-2 p-3 rounded-lg bg-secondary/30 hover:bg-secondary/50 transition-colors text-left"
+                                                >
+                                                    <div className="h-24 w-24 rounded-md bg-secondary flex items-center justify-center overflow-hidden">
+                                                        {album.artwork_url ? (
+                                                            <img
+                                                                src={album.artwork_url}
+                                                                alt={album.title}
+                                                                className="h-full w-full object-cover"
+                                                            />
+                                                        ) : (
+                                                            <Music className="h-8 w-8 text-muted-foreground" />
+                                                        )}
+                                                    </div>
+                                                    <div className="w-full text-center">
+                                                        <p className="font-medium text-sm truncate">{album.title}</p>
+                                                        <p className="text-xs text-muted-foreground truncate">
+                                                            {album.artist}
+                                                        </p>
+                                                        {album.track_count && (
+                                                            <p className="text-xs text-muted-foreground">
+                                                                {album.track_count} tracks
+                                                            </p>
+                                                        )}
+                                                    </div>
+                                                </button>
+                                            ))}
+                                        </div>
+                                    )}
+                                </TabsContent>
+
+                                <TabsContent value="songs" className="mt-4">
+                                    {searchResults.songs.length === 0 ? (
+                                        <p className="text-sm text-muted-foreground text-center py-4">
+                                            No songs found
+                                        </p>
+                                    ) : (
+                                        <div className="space-y-2 max-h-80 overflow-y-auto">
+                                            {searchResults.songs.map((song) => (
+                                                <button
+                                                    key={song.apple_music_id}
+                                                    onClick={() => handleSearchResultClick(song)}
+                                                    className="w-full flex items-center gap-3 p-2 rounded-md bg-secondary/30 hover:bg-secondary/50 transition-colors text-left"
+                                                >
+                                                    <div className="h-12 w-12 rounded bg-secondary flex items-center justify-center overflow-hidden flex-shrink-0">
+                                                        {song.artwork_url ? (
+                                                            <img
+                                                                src={song.artwork_url}
+                                                                alt={song.title}
+                                                                className="h-full w-full object-cover"
+                                                            />
+                                                        ) : (
+                                                            <Music className="h-5 w-5 text-muted-foreground" />
+                                                        )}
+                                                    </div>
+                                                    <div className="flex-1 min-w-0">
+                                                        <p className="font-medium text-sm truncate">{song.title}</p>
+                                                        <p className="text-xs text-muted-foreground truncate">
+                                                            {song.artist}
+                                                            {song.album_name && ` • ${song.album_name}`}
+                                                        </p>
+                                                    </div>
+                                                    {song.duration_ms && (
+                                                        <span className="text-xs text-muted-foreground">
+                                                            {formatDuration(song.duration_ms)}
+                                                        </span>
+                                                    )}
+                                                </button>
+                                            ))}
+                                        </div>
+                                    )}
+                                </TabsContent>
+                            </Tabs>
+                        </div>
+                    )}
+
+                    {/* Search Result Loading - Show when validating selected item */}
+                    {selectedSearchItem && isValidating && (
+                        <div className="p-4 rounded-lg bg-secondary/30 border">
+                            <div className="flex items-center gap-4">
+                                <div className="h-16 w-16 rounded-md bg-secondary animate-pulse" />
+                                <div className="flex-1 space-y-2">
+                                    <div className="h-4 w-3/4 bg-secondary rounded animate-pulse" />
+                                    <div className="h-3 w-1/2 bg-secondary rounded animate-pulse" />
+                                </div>
+                            </div>
+                            <p className="text-sm text-muted-foreground mt-3 text-center">
+                                Loading codec availability...
+                            </p>
+                        </div>
+                    )}
+
+                    {/* Back button when viewing search result preview */}
+                    {selectedSearchItem && validationResult?.valid && (
+                        <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={handleBackFromPreview}
+                            className="mb-2"
+                        >
+                            <ChevronLeft className="h-4 w-4 mr-1" />
+                            Back to search results
+                        </Button>
+                    )}
 
                     {/* Single Item Preview Card */}
                     {validationResult?.valid && (

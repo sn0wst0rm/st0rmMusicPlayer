@@ -3273,6 +3273,107 @@ async def validate_batch(request: ValidateBatchRequest):
     return ValidateBatchResponse(items=items, total_found=len(items))
 
 
+# --- Apple Music Catalog Search ---
+
+
+class SearchRequest(BaseModel):
+    term: str
+    cookies: Optional[str] = None
+    types: str = "songs,albums"
+    limit: int = 25
+
+
+class SearchResultItem(BaseModel):
+    type: str  # 'song' or 'album'
+    apple_music_id: str
+    title: str
+    artist: Optional[str] = None
+    artwork_url: Optional[str] = None
+    track_count: Optional[int] = None  # For albums
+    album_name: Optional[str] = None  # For songs
+    duration_ms: Optional[int] = None  # For songs
+
+
+class SearchResponse(BaseModel):
+    songs: list[SearchResultItem]
+    albums: list[SearchResultItem]
+    term: str
+    storefront: str  # e.g., "it", "us", "gb"
+
+
+@app.post("/search", response_model=SearchResponse)
+async def search_catalog(request: SearchRequest):
+    """Search Apple Music catalog for songs and albums.
+
+    Returns results organized by type. Codec availability is NOT included
+    in search results - it requires a separate validation call per track.
+    """
+    if not request.term or len(request.term) < 2:
+        return SearchResponse(songs=[], albums=[], term=request.term or "", storefront="")
+
+    if not request.cookies or not request.cookies.strip():
+        raise HTTPException(status_code=400, detail="Cookies required for search")
+
+    try:
+        apple_music_api = await get_or_create_api(request.cookies)
+
+        # Use the existing get_search_results method from ami.py
+        search_results = await apple_music_api.get_search_results(
+            term=request.term,
+            types=request.types,
+            limit=request.limit
+        )
+
+        results = search_results.get("results", {})
+
+        songs = []
+        albums = []
+
+        # Parse songs
+        songs_data = results.get("songs", {}).get("data", [])
+        for song in songs_data:
+            attrs = song.get("attributes", {})
+            artwork = attrs.get("artwork", {})
+            artwork_url = artwork.get("url", "").replace("{w}", "300").replace("{h}", "300") if artwork else None
+
+            songs.append(SearchResultItem(
+                type="song",
+                apple_music_id=song.get("id"),
+                title=attrs.get("name", "Unknown"),
+                artist=attrs.get("artistName"),
+                artwork_url=artwork_url,
+                album_name=attrs.get("albumName"),
+                duration_ms=attrs.get("durationInMillis"),
+            ))
+
+        # Parse albums
+        albums_data = results.get("albums", {}).get("data", [])
+        for album in albums_data:
+            attrs = album.get("attributes", {})
+            artwork = attrs.get("artwork", {})
+            artwork_url = artwork.get("url", "").replace("{w}", "300").replace("{h}", "300") if artwork else None
+
+            albums.append(SearchResultItem(
+                type="album",
+                apple_music_id=album.get("id"),
+                title=attrs.get("name", "Unknown"),
+                artist=attrs.get("artistName"),
+                artwork_url=artwork_url,
+                track_count=attrs.get("trackCount"),
+            ))
+
+        return SearchResponse(
+            songs=songs,
+            albums=albums,
+            term=request.term,
+            storefront=apple_music_api.storefront
+        )
+
+    except Exception as e:
+        print(f"Search error: {e}", flush=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # --- Playlist Sync ---
 
 

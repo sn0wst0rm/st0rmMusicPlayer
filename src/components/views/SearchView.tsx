@@ -15,6 +15,7 @@ interface SearchViewProps {
     playTrack: (track: Track, queue: Track[]) => void
     playAlbum: (album: Album) => void
     onSelectAlbum?: (album: Album, artistName?: string) => void
+    onSelectArtist?: (artistName: string) => void
 }
 
 // Extracted component to allow proper hook usage
@@ -71,7 +72,7 @@ function SongRow({ song, allSongs, playTrack, onGoToArtist, onGoToAlbum }: {
     )
 }
 
-export function SearchView({ playTrack, playAlbum, onSelectAlbum }: SearchViewProps) {
+export function SearchView({ playTrack, playAlbum, onSelectAlbum, onSelectArtist }: SearchViewProps) {
     const { searchQuery, library, setCurrentView, navigateToArtist, setSelectedAlbum } = usePlayerStore()
     const debouncedSearchQuery = useDebounce(searchQuery, 300)
     const [isSearching, setIsSearching] = React.useState(false)
@@ -206,7 +207,7 @@ export function SearchView({ playTrack, playAlbum, onSelectAlbum }: SearchViewPr
                                 <div
                                     key={artist.id}
                                     className="group relative flex flex-col gap-3 p-4 hover:bg-neutral-100/50 dark:hover:bg-neutral-800/50 rounded-lg transition-colors cursor-pointer"
-                                    onClick={() => setCurrentView('artists')}
+                                    onClick={() => onSelectArtist ? onSelectArtist(artist.name) : navigateToArtist(artist.name)}
                                 >
                                     <div className="aspect-square w-full overflow-hidden rounded-full bg-neutral-100 dark:bg-neutral-800">
                                         <div className="flex h-full w-full items-center justify-center text-4xl text-muted-foreground">
