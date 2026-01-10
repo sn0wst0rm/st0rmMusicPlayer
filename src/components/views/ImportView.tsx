@@ -105,9 +105,10 @@ function ActiveDownloadsBadge() {
 
 interface ImportViewProps {
     autoFocusUrl?: boolean
+    initialUrl?: string
 }
 
-export function ImportView({ autoFocusUrl = false }: ImportViewProps) {
+export function ImportView({ autoFocusUrl = false, initialUrl }: ImportViewProps) {
     const {
         gamdlServiceOnline,
         setGamdlServiceOnline,
@@ -134,7 +135,7 @@ export function ImportView({ autoFocusUrl = false }: ImportViewProps) {
         }
     }, [autoFocusUrl])
 
-    const [url, setUrl] = useState("")
+    const [url, setUrl] = useState(initialUrl || "")
     const [isValidating, setIsValidating] = useState(false)
     const [validationResult, setValidationResult] = useState<ValidationResult | null>(null)
     const [batchResults, setBatchResults] = useState<ValidationResult[]>([])
