@@ -60,3 +60,9 @@ src/generated
 scripts/venv/
 scripts/__pycache__
 wrapper-fork/
+
+# IDE
+.vscode/
+
+# Logs
+*.log
