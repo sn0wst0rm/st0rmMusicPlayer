@@ -3132,16 +3132,23 @@ async def extract_album_metadata_from_api(apple_music_api, content_id: str, is_l
         
         attrs = album_data.get("attributes", {}) if isinstance(album_data, dict) else {}
         artwork = attrs.get("artwork", {})
-        
+
         # Extract editorial notes/description
         description = None
         editorial_notes = attrs.get("editorialNotes", {})
         if editorial_notes:
             description = editorial_notes.get("standard") or editorial_notes.get("short")
-        
+
         # Extract animated cover URL (motion artwork)
         animated_cover_url = get_animated_cover_url(attrs)
-        
+
+        # Extract artist ID from album's relationships
+        artist_id = None
+        relationships = album_data.get("relationships", {}) if isinstance(album_data, dict) else {}
+        artists = relationships.get("artists", {}).get("data", [])
+        if artists and len(artists) > 0:
+            artist_id = artists[0].get("id")
+
         return {
             # Core album metadata
             "copyright": attrs.get("copyright"),
@@ -3161,6 +3168,8 @@ async def extract_album_metadata_from_api(apple_music_api, content_id: str, is_l
             "albumAppleMusicId": attrs.get("playParams", {}).get("id") or content_id,
             # Animated cover (motion artwork)
             "animatedCoverUrl": animated_cover_url,
+            # Artist ID from album relationships (for artist metadata fetching)
+            "artistId": artist_id,
         }
     except Exception as e:
         print(f"Error extracting album metadata from API: {e}")
@@ -4554,7 +4563,20 @@ async def download_song(request: DownloadRequest):
                 "type": url_info.type if hasattr(url_info, "type") else "unknown",
             }),
         }
-        
+
+        # Broadcast download_queued for all tracks so they appear in the queue immediately
+        for idx, queued_item in enumerate(download_queue):
+            queued_track_info = extract_track_info_for_ws(queued_item)
+            asyncio.create_task(broadcast_ws_event("download_queued", {
+                "track_id": queued_track_info["track_id"],
+                "title": queued_track_info["title"],
+                "artist": queued_track_info["artist"],
+                "album": queued_track_info["album"],
+                "position": idx + 1,
+                "total": total_tracks,
+                "codecs": codec_list,
+            }))
+
         # Download each track
         completed = 0
         print(f"[DEBUG] Starting download loop for {total_tracks} tracks...", flush=True)

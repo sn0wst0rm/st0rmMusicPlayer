@@ -310,34 +310,33 @@ class DockerWrapperManager:
     def _recv_auth_message(self, timeout: float = 60.0) -> Optional[dict]:
         """Receive a JSON message from the wrapper auth socket."""
         if not self._auth_socket:
-            print("[WRAPPER-MGR] No auth socket", flush=True)
+            logger.debug("No auth socket")
             return None
         try:
             self._auth_socket.settimeout(timeout)
             length_data = self._auth_socket.recv(4)
             if len(length_data) < 4:
-                print(f"[WRAPPER-MGR] Short length read: {len(length_data)}", flush=True)
+                logger.debug(f"Short length read: {len(length_data)}")
                 return None
             length = struct.unpack('>I', length_data)[0]
             if length > 65536:
-                print(f"[WRAPPER-MGR] Length too large: {length}", flush=True)
+                logger.debug(f"Length too large: {length}")
                 return None
             json_bytes = b''
             while len(json_bytes) < length:
                 chunk = self._auth_socket.recv(length - len(json_bytes))
                 if not chunk:
-                    print("[WRAPPER-MGR] Empty chunk", flush=True)
+                    logger.debug("Empty chunk")
                     return None
                 json_bytes += chunk
             msg = json.loads(json_bytes.decode('utf-8'))
-            print(f"[WRAPPER-MGR] Received: {msg.get('type', 'unknown')}", flush=True)
+            logger.debug(f"Received auth message: {msg.get('type', 'unknown')}")
             return msg
         except socket.timeout:
             logger.debug("Auth socket recv timeout")
             return None
         except Exception as e:
             logger.error(f"Failed to recv auth message: {e}")
-            print(f"[WRAPPER-MGR] Recv exception: {e}", flush=True)
             return None
     
     def submit_credentials(self, username: str, password: str) -> bool:
