@@ -83,13 +83,44 @@ echo ""
 # =============================================================================
 echo -e "${YELLOW}[3/6] Setting up database...${NC}"
 
-# Create .env file if it doesn't exist
-if [ ! -f ".env" ]; then
-    echo 'DATABASE_URL="file:./library.db"' > .env
-    echo -e "  ${GREEN}✓${NC} Created .env file"
+# Ask user for database location
+DEFAULT_DB_PATH="$SCRIPT_DIR/library.db"
+echo ""
+echo -e "Where would you like to save the library database?"
+echo -e "  Default: ${BLUE}$DEFAULT_DB_PATH${NC}"
+echo ""
+read -p "Enter path (press Enter for default): " USER_DB_PATH
+
+# Use default if empty
+if [ -z "$USER_DB_PATH" ]; then
+    DB_PATH="$DEFAULT_DB_PATH"
 else
-    echo -e "  ${GREEN}✓${NC} .env file already exists"
+    # Expand ~ to home directory if used
+    DB_PATH="${USER_DB_PATH/#\~/$HOME}"
+
+    # Make path absolute if relative
+    if [[ "$DB_PATH" != /* ]]; then
+        DB_PATH="$SCRIPT_DIR/$DB_PATH"
+    fi
+
+    # Ensure it ends with .db
+    if [[ "$DB_PATH" != *.db ]]; then
+        DB_PATH="$DB_PATH/library.db"
+    fi
 fi
+
+# Create parent directory if it doesn't exist
+DB_DIR="$(dirname "$DB_PATH")"
+if [ ! -d "$DB_DIR" ]; then
+    echo "  Creating directory: $DB_DIR"
+    mkdir -p "$DB_DIR"
+fi
+
+echo -e "  ${GREEN}✓${NC} Database will be saved to: ${BLUE}$DB_PATH${NC}"
+
+# Create/update .env file with database URL
+echo "DATABASE_URL=\"file:$DB_PATH\"" > .env
+echo -e "  ${GREEN}✓${NC} Created .env file"
 
 # Generate Prisma client
 echo "  Generating Prisma client..."
