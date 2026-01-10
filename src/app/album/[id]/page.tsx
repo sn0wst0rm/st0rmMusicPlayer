@@ -15,8 +15,7 @@ export default function AlbumPage() {
         setLibrary,
         selectedAlbum,
         setSelectedAlbum,
-        setCurrentView,
-        navigateToArtist
+        setCurrentView
     } = usePlayerStore()
 
     const [loading, setLoading] = React.useState(!selectedAlbum || selectedAlbum.id !== albumId)
@@ -88,8 +87,17 @@ export default function AlbumPage() {
 
     const handleArtistClick = () => {
         if (selectedAlbum) {
-            navigateToArtist(selectedAlbum.artistName)
-            router.push('/artists')
+            // Find the artist to get their Apple Music ID
+            const artist = library.find(a => a.name === selectedAlbum.artistName)
+            if (artist?.appleMusicId) {
+                router.push(`/artist/${artist.appleMusicId}`)
+            } else if (artist) {
+                // Fallback to internal ID if no Apple Music ID
+                router.push(`/artist/${artist.id}`)
+            } else {
+                // Fallback to artist name (URL encoded)
+                router.push(`/artist/${encodeURIComponent(selectedAlbum.artistName)}`)
+            }
         }
     }
 

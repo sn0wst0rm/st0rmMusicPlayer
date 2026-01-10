@@ -7,6 +7,7 @@ interface ArtistsViewProps {
     artists: Artist[]
     playAlbum: (album: Album) => void
     onSelectAlbum?: (album: Album, artistName?: string) => void
+    onSelectArtist?: (artist: Artist) => void
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     artistsComponents: any
     onScroll: (e: React.UIEvent<HTMLElement>) => void
@@ -20,6 +21,7 @@ export function ArtistsView({
     artists,
     playAlbum,
     onSelectAlbum,
+    onSelectArtist,
     artistsComponents,
     onScroll,
     virtuosoRef,
@@ -56,8 +58,9 @@ export function ArtistsView({
                         itemContent={(index, artist) => (
                             <div className="mb-8">
                                 <h2
-                                    className="text-xl font-semibold text-primary/80 sticky top-[56px] z-30 py-2 px-8 bg-background/60 backdrop-blur-md"
+                                    className="text-xl font-semibold text-primary/80 sticky top-[56px] z-30 py-2 px-8 bg-background/60 backdrop-blur-md cursor-pointer hover:text-primary transition-colors"
                                     data-letter={artist.name.charAt(0).toUpperCase()}
+                                    onClick={() => onSelectArtist?.(artist)}
                                 >
                                     {artist.name}
                                 </h2>

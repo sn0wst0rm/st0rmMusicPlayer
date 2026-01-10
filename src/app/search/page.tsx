@@ -5,7 +5,7 @@ import { Suspense } from "react"
 import { useSearchParams, useRouter } from "next/navigation"
 import { usePlayerStore, Track } from "@/lib/store"
 import { SearchView } from "@/components/views/SearchView"
-import { Album } from "@/types/music"
+import { Album, Artist } from "@/types/music"
 
 function SearchPageContent() {
     const searchParams = useSearchParams()
@@ -18,8 +18,7 @@ function SearchPageContent() {
         setSearchQuery,
         setSelectedAlbum,
         library,
-        setLibrary,
-        navigateToArtist
+        setLibrary
     } = usePlayerStore()
 
     const [loading, setLoading] = React.useState(library.length === 0)
@@ -78,9 +77,12 @@ function SearchPageContent() {
         router.push(`/album/${album.id}`)
     }
 
-    const selectArtist = (artistName: string) => {
-        navigateToArtist(artistName)
-        router.push('/artists')
+    const selectArtist = (artist: Artist) => {
+        if (artist.appleMusicId) {
+            router.push(`/artist/${artist.appleMusicId}`)
+        } else {
+            router.push(`/artist/${artist.id}`)
+        }
     }
 
     if (loading) {

@@ -133,7 +133,7 @@ async def download_animated_cover(
             small_palette_cmd = [
                 "ffmpeg", "-y",
                 "-i", str(full_path),
-                "-vf", "fps=12,scale=128:-1:flags=lanczos,palettegen",
+                "-vf", "fps=15,scale=200:-1:flags=lanczos,palettegen",
                 str(small_palette_path)
             ]
             result = await asyncio.get_event_loop().run_in_executor(
@@ -145,7 +145,7 @@ async def download_animated_cover(
                     "ffmpeg", "-y",
                     "-i", str(full_path),
                     "-i", str(small_palette_path),
-                    "-lavfi", "fps=12,scale=128:-1:flags=lanczos[x];[x][1:v]paletteuse",
+                    "-lavfi", "fps=15,scale=200:-1:flags=lanczos[x];[x][1:v]paletteuse",
                     "-loop", "0",
                     str(small_path)
                 ]
@@ -193,29 +193,40 @@ async def download_animated_cover(
         
         print(f"[ANIMATED COVER] Selected best quality (bandwidth: {best_bandwidth})", flush=True)
         
-        # Step 1: Download best quality MP4 (for archival and quality)
+        # Step 1: Download best quality MP4 (preserving full duration)
+        # Using -c copy to avoid transcoding issues with HEVC HLS streams that cause duration truncation
         mp4_path = output_dir / "cover-animated.mp4"
         if not mp4_path.exists():
+            # Two-step approach to ensure full duration is captured:
+            # 1. First download with -c copy to preserve the complete HLS stream
             mp4_cmd = [
                 "ffmpeg", "-y",
                 "-i", best_stream_url,
-                "-c:v", "libx264",
-                "-preset", "slow",  # Better quality
-                "-crf", "18",  # High quality
-                "-an",
+                "-c", "copy",  # No transcoding - preserves full duration
+                "-an",          # No audio
                 "-movflags", "+faststart",
                 str(mp4_path)
             ]
             
-            print(f"[ANIMATED COVER] Downloading best quality MP4...", flush=True)
+            print(f"[ANIMATED COVER] Downloading best quality MP4 (copy mode)...", flush=True)
             result = await asyncio.get_event_loop().run_in_executor(
                 None,
-                lambda: subprocess.run(mp4_cmd, capture_output=True, timeout=180)
+                lambda: subprocess.run(mp4_cmd, capture_output=True, timeout=300)  # Increased timeout for full download
             )
             
             if result.returncode != 0:
                 print(f"[ANIMATED COVER] MP4 download failed: {result.stderr.decode()[:500]}", flush=True)
                 return None
+            
+            # Verify the downloaded file has reasonable duration
+            try:
+                probe_cmd = ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", str(mp4_path)]
+                probe_res = subprocess.run(probe_cmd, capture_output=True, text=True, timeout=10)
+                if probe_res.returncode == 0:
+                    duration = float(probe_res.stdout.strip())
+                    print(f"[ANIMATED COVER] Downloaded MP4 duration: {duration:.1f}s", flush=True)
+            except Exception as e:
+                print(f"[ANIMATED COVER] Could not probe duration: {e}", flush=True)
         else:
             print(f"[ANIMATED COVER] MP4 already exists, using existing", flush=True)
         
@@ -356,7 +367,7 @@ async def download_animated_cover(
         small_palette_cmd = [
             "ffmpeg", "-y",
             "-i", str(full_path),
-            "-vf", "fps=12,scale=128:-1:flags=lanczos,palettegen",
+            "-vf", "fps=15,scale=200:-1:flags=lanczos,palettegen",
             str(small_palette_path)
         ]
         
@@ -370,7 +381,7 @@ async def download_animated_cover(
                 "ffmpeg", "-y",
                 "-i", str(full_path),
                 "-i", str(small_palette_path),
-                "-lavfi", "fps=12,scale=128:-1:flags=lanczos[x];[x][1:v]paletteuse",
+                "-lavfi", "fps=15,scale=200:-1:flags=lanczos[x];[x][1:v]paletteuse",
                 "-loop", "0",
                 str(small_path)
             ]
@@ -385,7 +396,7 @@ async def download_animated_cover(
             small_cmd = [
                 "ffmpeg", "-y",
                 "-i", str(full_path),
-                "-vf", "fps=12,scale=128:-1",
+                "-vf", "fps=15,scale=200:-1",
                 "-loop", "0",
                 str(small_path)
             ]
@@ -411,6 +422,236 @@ async def download_animated_cover(
         print(f"[ANIMATED COVER] Error downloading: {e}", flush=True)
         traceback.print_exc()
         return None
+
+
+async def download_artist_hero_media(
+    artist_name: str,
+    artist_attrs: dict,
+    media_library_path: Path
+) -> dict:
+    """
+    Download artist hero media (animated video and static images) to .metadata folder.
+
+    Returns dict with paths:
+    {
+        "heroAnimatedPath": path to hero-animated.mp4 (or None),
+        "heroStaticPath": path to hero-static.jpg (always downloaded),
+        "profileImagePath": path to profile.jpg (always downloaded)
+    }
+    """
+    result = {
+        "heroAnimatedPath": None,
+        "heroStaticPath": None,
+        "profileImagePath": None
+    }
+
+    try:
+        # Sanitize artist name for folder path
+        safe_artist_name = re.sub(r'[<>:"/\\|?*]', '_', artist_name)
+        artist_folder = media_library_path / safe_artist_name
+        metadata_folder = artist_folder / ".metadata"
+        metadata_folder.mkdir(parents=True, exist_ok=True)
+
+        print(f"[ARTIST HERO] Processing hero media for: {artist_name}", flush=True)
+
+        # Extract URLs from artist attributes
+        editorial_video = artist_attrs.get("editorialVideo", {})
+        artwork = artist_attrs.get("artwork", {})
+
+        # 1. Download animated hero video (motionArtistWide16x9)
+        motion_wide = editorial_video.get("motionArtistWide16x9", {})
+        hero_m3u8_url = motion_wide.get("video")
+
+        if hero_m3u8_url:
+            hero_mp4_path = metadata_folder / "hero-animated.mp4"
+
+            if hero_mp4_path.exists():
+                print(f"[ARTIST HERO] ✅ Hero video already exists: {hero_mp4_path}", flush=True)
+                result["heroAnimatedPath"] = str(hero_mp4_path)
+            else:
+                print(f"[ARTIST HERO] Downloading hero video from: {hero_m3u8_url[:80]}...", flush=True)
+
+                # Fetch master playlist and find a reasonable quality stream (1080p AVC)
+                import httpx
+                async with httpx.AsyncClient() as client:
+                    response = await client.get(hero_m3u8_url)
+                    if response.status_code == 200:
+                        playlist_content = response.text
+
+                        # Find a 1080p AVC stream (good quality but not too heavy)
+                        # Prefer AVC (h264) over HEVC for better compatibility
+                        best_stream_url = hero_m3u8_url
+                        target_stream_url = None
+
+                        lines = playlist_content.strip().split('\n')
+                        for i, line in enumerate(lines):
+                            if line.startswith('#EXT-X-STREAM-INF'):
+                                # Look for 1080p AVC stream
+                                if 'avc1' in line and '1920x1080' in line and i + 1 < len(lines):
+                                    variant_url = lines[i + 1].strip()
+                                    if not variant_url.startswith('http'):
+                                        base_url = hero_m3u8_url.rsplit('/', 1)[0]
+                                        variant_url = f"{base_url}/{variant_url}"
+                                    target_stream_url = variant_url
+                                    # Get bandwidth for logging
+                                    bandwidth_match = re.search(r'BANDWIDTH=(\d+)', line)
+                                    bandwidth = int(bandwidth_match.group(1)) if bandwidth_match else 0
+                                    print(f"[ARTIST HERO] Selected 1080p AVC stream (bandwidth: {bandwidth})", flush=True)
+                                    break
+
+                        # Fallback to 720p if no 1080p found
+                        if not target_stream_url:
+                            for i, line in enumerate(lines):
+                                if line.startswith('#EXT-X-STREAM-INF'):
+                                    if 'avc1' in line and '1280x720' in line and i + 1 < len(lines):
+                                        variant_url = lines[i + 1].strip()
+                                        if not variant_url.startswith('http'):
+                                            base_url = hero_m3u8_url.rsplit('/', 1)[0]
+                                            variant_url = f"{base_url}/{variant_url}"
+                                        target_stream_url = variant_url
+                                        print(f"[ARTIST HERO] Selected 720p AVC stream (fallback)", flush=True)
+                                        break
+
+                        # Use the master URL if no specific variant found (let ffmpeg pick)
+                        if not target_stream_url:
+                            target_stream_url = hero_m3u8_url
+                            print(f"[ARTIST HERO] Using master playlist (ffmpeg will select)", flush=True)
+
+                        # Download as MP4 with longer timeout and copy codec when possible
+                        mp4_cmd = [
+                            "ffmpeg", "-y",
+                            "-i", target_stream_url,
+                            "-c:v", "libx264",
+                            "-preset", "fast",
+                            "-crf", "22",
+                            "-an",  # No audio
+                            "-movflags", "+faststart",
+                            str(hero_mp4_path)
+                        ]
+
+                        print(f"[ARTIST HERO] Starting ffmpeg download (this may take a while)...", flush=True)
+
+                        ffmpeg_result = await asyncio.get_event_loop().run_in_executor(
+                            None,
+                            lambda: subprocess.run(mp4_cmd, capture_output=True, timeout=600)  # 10 min timeout
+                        )
+
+                        if ffmpeg_result.returncode == 0 and hero_mp4_path.exists():
+                            # Check duration
+                            probe_cmd = ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", str(hero_mp4_path)]
+                            probe_result = subprocess.run(probe_cmd, capture_output=True, text=True)
+                            duration = float(probe_result.stdout.strip()) if probe_result.stdout.strip() else 0
+                            print(f"[ARTIST HERO] ✅ Hero video downloaded: {hero_mp4_path} ({duration:.1f}s)", flush=True)
+                            result["heroAnimatedPath"] = str(hero_mp4_path)
+                        else:
+                            print(f"[ARTIST HERO] Hero video download failed: {ffmpeg_result.stderr.decode()[:300]}", flush=True)
+
+        # 2. Download static hero image (from previewFrame or fallback to artwork)
+        hero_static_path = metadata_folder / "hero-static.jpg"
+
+        if not hero_static_path.exists():
+            # Try previewFrame from motionArtistWide16x9 first
+            preview_frame = motion_wide.get("previewFrame", {})
+            static_url = preview_frame.get("url") if preview_frame else None
+
+            if static_url:
+                # Transform URL template
+                static_url = static_url.replace("{w}", "3840").replace("{h}", "2160").replace("{c}", "").replace("{f}", "jpg")
+            else:
+                # Fallback to regular artwork (square, use larger size)
+                artwork_url = artwork.get("url")
+                if artwork_url:
+                    static_url = artwork_url.replace("{w}", "2400").replace("{h}", "2400").replace("{c}", "").replace("{f}", "jpg")
+
+            if static_url:
+                print(f"[ARTIST HERO] Downloading static hero: {static_url[:80]}...", flush=True)
+                import httpx
+                async with httpx.AsyncClient() as client:
+                    response = await client.get(static_url)
+                    if response.status_code == 200:
+                        hero_static_path.write_bytes(response.content)
+                        print(f"[ARTIST HERO] ✅ Static hero downloaded: {hero_static_path}", flush=True)
+                        result["heroStaticPath"] = str(hero_static_path)
+                    else:
+                        print(f"[ARTIST HERO] Static hero download failed: {response.status_code}", flush=True)
+        else:
+            print(f"[ARTIST HERO] ✅ Static hero already exists: {hero_static_path}", flush=True)
+            result["heroStaticPath"] = str(hero_static_path)
+
+        # 3. Download profile image (from artwork)
+        profile_path = metadata_folder / "profile.jpg"
+
+        if not profile_path.exists():
+            artwork_url = artwork.get("url")
+            if artwork_url:
+                profile_url = artwork_url.replace("{w}", "1200").replace("{h}", "1200").replace("{c}", "").replace("{f}", "jpg")
+                print(f"[ARTIST HERO] Downloading profile image: {profile_url[:80]}...", flush=True)
+                import httpx
+                async with httpx.AsyncClient() as client:
+                    response = await client.get(profile_url)
+                    if response.status_code == 200:
+                        profile_path.write_bytes(response.content)
+                        print(f"[ARTIST HERO] ✅ Profile image downloaded: {profile_path}", flush=True)
+                        result["profileImagePath"] = str(profile_path)
+                    else:
+                        print(f"[ARTIST HERO] Profile image download failed: {response.status_code}", flush=True)
+        else:
+            print(f"[ARTIST HERO] ✅ Profile image already exists: {profile_path}", flush=True)
+            result["profileImagePath"] = str(profile_path)
+
+        return result
+
+    except Exception as e:
+        print(f"[ARTIST HERO] Error downloading hero media: {e}", flush=True)
+        traceback.print_exc()
+        return result
+
+
+async def background_download_artist_hero(
+    artist_id: str,
+    artist_name: str,
+    artist_attrs: dict,
+    media_library_path: Path,
+    db_path: str
+):
+    """
+    Background task to download artist hero media and save to database.
+    This runs asynchronously so it doesn't block the API response.
+    """
+    try:
+        print(f"[ARTIST HERO BG] Starting background download for: {artist_name}", flush=True)
+
+        # Download hero media
+        hero_paths = await download_artist_hero_media(artist_name, artist_attrs, media_library_path)
+
+        # Save paths to database
+        if any(hero_paths.values()):
+            import sqlite3
+            save_conn = sqlite3.connect(db_path)
+            save_cursor = save_conn.cursor()
+            update_query = """
+                UPDATE Artist SET
+                    heroAnimatedPath = COALESCE(?, heroAnimatedPath),
+                    heroStaticPath = COALESCE(?, heroStaticPath),
+                    profileImagePath = COALESCE(?, profileImagePath),
+                    updatedAt = datetime('now')
+                WHERE appleMusicId = ?
+            """
+            save_cursor.execute(update_query, (
+                hero_paths.get("heroAnimatedPath"),
+                hero_paths.get("heroStaticPath"),
+                hero_paths.get("profileImagePath"),
+                artist_id
+            ))
+            save_conn.commit()
+            save_conn.close()
+            print(f"[ARTIST HERO BG] ✅ Saved hero paths for {artist_name}", flush=True)
+        else:
+            print(f"[ARTIST HERO BG] No hero paths to save for {artist_name}", flush=True)
+
+    except Exception as e:
+        print(f"[ARTIST HERO BG] Error in background download: {e}", flush=True)
+        traceback.print_exc()
 
 
 def extract_track_info_for_ws(download_item) -> dict:
@@ -2563,7 +2804,12 @@ def extract_apple_music_ids_from_item(download_item) -> dict:
                 albums = relationships.get('albums', {}).get('data', [])
                 if albums and len(albums) > 0:
                     result['albumAppleMusicId'] = albums[0].get('id')
-                
+
+                # Get artist ID from relationships
+                artists = relationships.get('artists', {}).get('data', [])
+                if artists and len(artists) > 0:
+                    result['artistId'] = artists[0].get('id')
+
                 # Get attributes for extra metadata
                 attrs = mm.get('attributes', {})
                 if attrs:
@@ -3371,6 +3617,232 @@ async def search_catalog(request: SearchRequest):
 
     except Exception as e:
         print(f"Search error: {e}", flush=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# --- Artist Info ---
+
+
+class ArtistRequest(BaseModel):
+    artist_id: str
+    cookies: Optional[str] = None
+
+
+class ArtistAlbumItem(BaseModel):
+    apple_music_id: str
+    title: str
+    artwork_url: Optional[str] = None
+    release_date: Optional[str] = None
+    track_count: Optional[int] = None
+    is_single: bool = False
+
+
+class ArtistResponse(BaseModel):
+    apple_music_id: str
+    name: str
+    artwork_url: Optional[str] = None
+    bio: Optional[str] = None
+    genre: Optional[str] = None
+    origin: Optional[str] = None
+    birth_date: Optional[str] = None
+    url: Optional[str] = None
+    albums: list[ArtistAlbumItem]
+    singles: list[ArtistAlbumItem]
+    storefront: str
+    # Extended metadata
+    is_group: Optional[bool] = None
+    plain_editorial_notes: Optional[str] = None
+    # Hero media URLs (HLS m3u8 or static images)
+    hero_video_url: Optional[str] = None          # motionArtistWide16x9 video URL
+    hero_static_url: Optional[str] = None         # previewFrame URL for static fallback
+    profile_video_url: Optional[str] = None       # motionArtistSquare1x1 video URL
+
+
+def transform_artwork_url(url: Optional[str], size: int = 600) -> Optional[str]:
+    """Transform Apple Music artwork URL template to actual URL."""
+    if not url:
+        return None
+    return url.replace("{w}", str(size)).replace("{h}", str(size))
+
+
+@app.post("/artist", response_model=ArtistResponse)
+async def get_artist_info(request: ArtistRequest):
+    """Get artist information from Apple Music API with extended metadata."""
+    try:
+        apple_music_api = await get_or_create_api(request.cookies)
+
+        # Make direct HTTP request with extend parameter (gamdl doesn't support it)
+        from gamdl.utils import raise_for_status, safe_json
+        response = await apple_music_api.client.get(
+            f"https://amp-api.music.apple.com/v1/catalog/{apple_music_api.storefront}/artists/{request.artist_id}",
+            params={
+                "include": "albums,music-videos",
+                "extend": "artistBio,bornOrFormed,editorialArtwork,editorialVideo,hero,isGroup,origin,plainEditorialNotes",
+                "limit[albums]": 100,
+                "limit[music-videos]": 100,
+            },
+        )
+        raise_for_status(response, {200, 404})
+
+        if response.status_code == 404:
+            raise HTTPException(status_code=404, detail="Artist not found")
+
+        artist_data = safe_json(response)
+        if not artist_data or "data" not in artist_data or len(artist_data["data"]) == 0:
+            raise HTTPException(status_code=404, detail="Artist not found")
+
+        artist = artist_data["data"][0]
+        attrs = artist.get("attributes", {})
+        relationships = artist.get("relationships", {})
+        artist_id = artist.get("id")
+        artist_name = attrs.get("name", "Unknown Artist")
+
+        # Extract albums from relationships
+        albums = []
+        singles = []
+        for album in relationships.get("albums", {}).get("data", []):
+            album_attrs = album.get("attributes", {})
+            artwork = album_attrs.get("artwork", {})
+            item = ArtistAlbumItem(
+                apple_music_id=album.get("id"),
+                title=album_attrs.get("name", ""),
+                artwork_url=transform_artwork_url(artwork.get("url") if artwork else None),
+                release_date=album_attrs.get("releaseDate"),
+                track_count=album_attrs.get("trackCount"),
+                is_single=album_attrs.get("isSingle", False)
+            )
+            if item.is_single:
+                singles.append(item)
+            else:
+                albums.append(item)
+
+        # Get bio - try artistBio first (from extend param), then fall back to editorialNotes
+        bio = attrs.get("artistBio")
+        if not bio:
+            editorial_notes = attrs.get("editorialNotes") or {}
+            bio = editorial_notes.get("standard") or editorial_notes.get("short")
+
+        # Get plain editorial notes (no HTML)
+        plain_editorial_notes = attrs.get("plainEditorialNotes") or attrs.get("artistBio")
+
+        # Get genre names
+        genre_names = attrs.get("genreNames", [])
+        genre = genre_names[0] if genre_names else None
+
+        # Get artwork (profile image)
+        artwork = attrs.get("artwork", {})
+        artwork_url = transform_artwork_url(artwork.get("url") if artwork else None, 1200)
+
+        # Get extended metadata
+        is_group = attrs.get("isGroup")
+
+        # Get bornOrFormed (birth date or formation date)
+        birth_date = attrs.get("bornOrFormed") or attrs.get("birthDate")
+
+        # Get hero media URLs - check local cache first, use remote as fallback
+        hero_video_url = None
+        hero_static_url = None
+        profile_video_url = None
+
+        try:
+            import sqlite3
+            import os
+            script_dir = os.path.dirname(os.path.abspath(__file__))
+            project_root = os.path.dirname(script_dir)
+            db_path = os.path.join(project_root, "library.db")
+
+            conn = sqlite3.connect(db_path)
+            cursor = conn.cursor()
+
+            # Check if we already have cached hero files for this artist
+            cursor.execute("""
+                SELECT heroAnimatedPath, heroStaticPath, profileImagePath
+                FROM Artist WHERE appleMusicId = ?
+            """, (artist_id,))
+            cached = cursor.fetchone()
+
+            # Get media library path for potential background download
+            cursor.execute("SELECT mediaLibraryPath FROM GamdlSettings WHERE id = 'singleton'")
+            settings_row = cursor.fetchone()
+            conn.close()
+
+            media_library_path = Path(settings_row[0]) if settings_row and settings_row[0] else Path("./music")
+            if not media_library_path.is_absolute():
+                media_library_path = Path(project_root) / media_library_path
+
+            # Check for existing cached files
+            if cached:
+                animated_path, static_path, profile_path = cached
+                if animated_path and Path(animated_path).exists():
+                    hero_video_url = f"/api/artist-hero/{artist_id}/hero-animated.mp4"
+                if static_path and Path(static_path).exists():
+                    hero_static_url = f"/api/artist-hero/{artist_id}/hero-static.jpg"
+                if profile_path and Path(profile_path).exists():
+                    profile_video_url = f"/api/artist-hero/{artist_id}/profile.jpg"
+
+            # If we don't have local files, use remote URLs and trigger background download
+            if not hero_static_url:
+                # Use remote URLs immediately
+                editorial_video = attrs.get("editorialVideo", {})
+                motion_wide = editorial_video.get("motionArtistWide16x9", {})
+
+                if motion_wide:
+                    # For animated, pass HLS URL (frontend can't use it but we need to download)
+                    hero_m3u8 = motion_wide.get("video")
+                    preview_frame = motion_wide.get("previewFrame", {})
+                    if preview_frame and preview_frame.get("url"):
+                        # Use static preview frame as fallback
+                        hero_static_url = transform_artwork_url(preview_frame.get("url"), 3840)
+
+                if not hero_static_url and artwork_url:
+                    hero_static_url = artwork_url
+
+                # Trigger background download (don't wait for it)
+                asyncio.create_task(
+                    background_download_artist_hero(
+                        artist_id, artist_name, attrs, media_library_path, db_path
+                    )
+                )
+                print(f"[ARTIST] Background hero download started for {artist_name}", flush=True)
+
+        except Exception as hero_err:
+            print(f"[ARTIST] Error processing hero media: {hero_err}", flush=True)
+            # Fallback to remote URLs
+            editorial_video = attrs.get("editorialVideo", {})
+            motion_wide = editorial_video.get("motionArtistWide16x9", {})
+            if motion_wide:
+                preview_frame = motion_wide.get("previewFrame", {})
+                if preview_frame and preview_frame.get("url"):
+                    hero_static_url = transform_artwork_url(preview_frame.get("url"), 3840)
+            if not hero_static_url and artwork_url:
+                hero_static_url = artwork_url
+
+        return ArtistResponse(
+            apple_music_id=artist_id,
+            name=artist_name,
+            artwork_url=artwork_url,
+            bio=bio,
+            genre=genre,
+            origin=attrs.get("origin"),
+            birth_date=birth_date,
+            url=attrs.get("url"),
+            albums=albums,
+            singles=singles,
+            storefront=apple_music_api.storefront,
+            # Extended fields
+            is_group=is_group,
+            plain_editorial_notes=plain_editorial_notes,
+            hero_video_url=hero_video_url,
+            hero_static_url=hero_static_url,
+            profile_video_url=profile_video_url,
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Artist info error: {e}", flush=True)
+        import traceback
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -4368,12 +4840,21 @@ async def download_song(request: DownloadRequest):
                             print(f"[ANIMATED COVER] Failed to download: {e}", flush=True)
                     elif animated_cover_url and i > 0:
                         # For subsequent tracks, check if animated cover already exists
-                        potential_animated = Path(file_path).parent / "cover-animated.mp4"
-                        potential_animated_small = Path(file_path).parent / "cover-animated-small.mp4"
-                        if potential_animated.exists():
-                            animated_cover_path = str(potential_animated)
-                        if potential_animated_small.exists():
-                            animated_cover_small_path = str(potential_animated_small)
+                        # Check for GIF first (current format), then MP4 (legacy fallback)
+                        potential_animated_gif = Path(file_path).parent / "cover-animated.gif"
+                        potential_animated_mp4 = Path(file_path).parent / "cover-animated.mp4"
+                        potential_animated_small_gif = Path(file_path).parent / "cover-animated-small.gif"
+                        potential_animated_small_mp4 = Path(file_path).parent / "cover-animated-small.mp4"
+                        
+                        if potential_animated_gif.exists():
+                            animated_cover_path = str(potential_animated_gif)
+                        elif potential_animated_mp4.exists():
+                            animated_cover_path = str(potential_animated_mp4)
+                            
+                        if potential_animated_small_gif.exists():
+                            animated_cover_small_path = str(potential_animated_small_gif)
+                        elif potential_animated_small_mp4.exists():
+                            animated_cover_small_path = str(potential_animated_small_mp4)
 
                     yield {
                         "event": "track_complete",

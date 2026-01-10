@@ -16,6 +16,7 @@ export interface Album {
 export interface Artist {
     id: string
     name: string
+    appleMusicId?: string
     albums: Album[]
 }
 

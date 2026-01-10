@@ -33,7 +33,7 @@ import { Lightning } from "@/components/icons/lightning"
 import { MarqueeText } from "@/components/ui/marquee-text"
 import { usePlayerStore, Track } from "@/lib/store"
 import { searchLibraryLimited, SongSearchResult, AlbumSearchResult, ArtistSearchResult } from "@/lib/search"
-import { Album, Playlist } from "@/types/music"
+import { Album, Artist, Playlist } from "@/types/music"
 
 export function AppSidebar() {
     const pathname = usePathname()
@@ -116,9 +116,13 @@ export function AppSidebar() {
         setOpenPopover(false)
     }
 
-    const handleGoToArtist = () => {
-        // Switch to Artists view
-        router.push('/artists')
+    const handleGoToArtist = (artist: Artist) => {
+        // Navigate to artist page
+        if (artist.appleMusicId) {
+            router.push(`/artist/${artist.appleMusicId}`)
+        } else {
+            router.push(`/artist/${artist.id}`)
+        }
         setOpenPopover(false)
     }
 
@@ -250,7 +254,7 @@ export function AppSidebar() {
                                             {searchResults.artists.length > 0 && (
                                                 <CommandGroup heading="Artists">
                                                     {searchResults.artists.map((artist) => (
-                                                        <CommandItem key={artist.id} onSelect={() => handleGoToArtist()} className="gap-3 overflow-hidden">
+                                                        <CommandItem key={artist.id} onSelect={() => handleGoToArtist(artist)} className="gap-3 overflow-hidden">
                                                             <Mic2 className="h-4 w-4 shrink-0 text-muted-foreground" />
                                                             <div className="flex flex-col min-w-0 flex-1">
                                                                 <MarqueeText text={artist.name} className="text-sm" />

@@ -8,7 +8,7 @@ import { cn } from "@/lib/utils"
 import { usePlayerStore } from "@/lib/store"
 import { ArtistsView } from "@/components/views/ArtistsView"
 import { LetterSelector } from "@/components/ui/letter-selector"
-import { Album } from "@/types/music"
+import { Album, Artist } from "@/types/music"
 import { useRouter } from "next/navigation"
 
 export default function ArtistsPage() {
@@ -84,6 +84,14 @@ export default function ArtistsPage() {
         router.push(`/album/${album.id}`)
     }
 
+    const selectArtist = (artist: Artist) => {
+        if (artist.appleMusicId) {
+            router.push(`/artist/${artist.appleMusicId}`)
+        } else {
+            router.push(`/artist/${artist.id}`)
+        }
+    }
+
     const handleLetterClick = (letter: string) => {
         setActiveLetter(letter)
         if (virtuosoRef.current) {
@@ -154,6 +162,7 @@ export default function ArtistsPage() {
                 artists={sortedArtists}
                 playAlbum={playAlbum}
                 onSelectAlbum={selectAlbum}
+                onSelectArtist={selectArtist}
                 artistsComponents={artistsComponents}
                 onScroll={handleScroll}
                 virtuosoRef={virtuosoRef}

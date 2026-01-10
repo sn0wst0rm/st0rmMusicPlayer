@@ -10,13 +10,14 @@ function ImportPageContent() {
     const { setCurrentView } = usePlayerStore()
     const searchParams = useSearchParams()
     const shouldFocusUrl = searchParams.get('focus') === 'url'
+    const initialUrl = searchParams.get('url') || undefined
 
     // Sync view state
     React.useEffect(() => {
         setCurrentView('import')
     }, [setCurrentView])
 
-    return <ImportView autoFocusUrl={shouldFocusUrl} />
+    return <ImportView autoFocusUrl={shouldFocusUrl || !!initialUrl} initialUrl={initialUrl} />
 }
 
 export default function ImportPage() {

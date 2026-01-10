@@ -15,18 +15,27 @@ async function updateAnimatedCovers() {
         if (album.tracks.length === 0) continue;
 
         const trackDir = dirname(album.tracks[0].filePath);
-        const animatedPath = join(trackDir, 'cover-animated.mp4');
-        const animatedSmallPath = join(trackDir, 'cover-animated-small.mp4');
 
-        if (existsSync(animatedPath)) {
+        // Check for GIF first (current format), then MP4 (legacy)
+        const animatedGifPath = join(trackDir, 'cover-animated.gif');
+        const animatedMp4Path = join(trackDir, 'cover-animated.mp4');
+        const animatedSmallGifPath = join(trackDir, 'cover-animated-small.gif');
+        const animatedSmallMp4Path = join(trackDir, 'cover-animated-small.mp4');
+
+        const animatedPath = existsSync(animatedGifPath) ? animatedGifPath :
+            existsSync(animatedMp4Path) ? animatedMp4Path : null;
+        const animatedSmallPath = existsSync(animatedSmallGifPath) ? animatedSmallGifPath :
+            existsSync(animatedSmallMp4Path) ? animatedSmallMp4Path : null;
+
+        if (animatedPath) {
             await prisma.album.update({
                 where: { id: album.id },
                 data: {
                     animatedCoverPath: animatedPath,
-                    animatedCoverSmallPath: existsSync(animatedSmallPath) ? animatedSmallPath : null
+                    animatedCoverSmallPath: animatedSmallPath
                 }
             });
-            console.log('Updated:', album.title);
+            console.log('Updated:', album.title, '->', animatedPath);
             updated++;
         }
     }

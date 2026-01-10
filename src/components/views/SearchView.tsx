@@ -2,7 +2,7 @@ import * as React from "react"
 import { useDebounce } from "@/hooks/use-debounce"
 import { usePlayerStore, Track } from "@/lib/store"
 import { searchLibrary, SongSearchResult, AlbumSearchResult, ArtistSearchResult } from "@/lib/search"
-import { Album } from "@/types/music"
+import { Album, Artist } from "@/types/music"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Separator } from "@/components/ui/separator"
 import { Skeleton } from "@/components/ui/skeleton"
@@ -15,7 +15,7 @@ interface SearchViewProps {
     playTrack: (track: Track, queue: Track[]) => void
     playAlbum: (album: Album) => void
     onSelectAlbum?: (album: Album, artistName?: string) => void
-    onSelectArtist?: (artistName: string) => void
+    onSelectArtist?: (artist: Artist) => void
 }
 
 // Extracted component to allow proper hook usage
@@ -207,7 +207,7 @@ export function SearchView({ playTrack, playAlbum, onSelectAlbum, onSelectArtist
                                 <div
                                     key={artist.id}
                                     className="group relative flex flex-col gap-3 p-4 hover:bg-neutral-100/50 dark:hover:bg-neutral-800/50 rounded-lg transition-colors cursor-pointer"
-                                    onClick={() => onSelectArtist ? onSelectArtist(artist.name) : navigateToArtist(artist.name)}
+                                    onClick={() => onSelectArtist ? onSelectArtist(artist) : navigateToArtist(artist.name)}
                                 >
                                     <div className="aspect-square w-full overflow-hidden rounded-full bg-neutral-100 dark:bg-neutral-800">
                                         <div className="flex h-full w-full items-center justify-center text-4xl text-muted-foreground">
