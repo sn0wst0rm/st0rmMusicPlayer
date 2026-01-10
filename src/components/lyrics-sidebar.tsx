@@ -464,7 +464,7 @@ const LyricsPlaceholder = memo(function LyricsPlaceholder({
         )}>
             {state === 'loading' && (
                 <div className="animate-pulse flex flex-col items-center gap-3">
-                    {/* Custom microphone SVG with single merged path to avoid overlap artifacts */}
+                    {/* Mic2 icon merged into single path to avoid overlap artifacts with opacity */}
                     <svg
                         className="h-10 w-10 opacity-30"
                         viewBox="0 0 24 24"
@@ -474,7 +474,7 @@ const LyricsPlaceholder = memo(function LyricsPlaceholder({
                         strokeLinecap="round"
                         strokeLinejoin="round"
                     >
-                        <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z M19 10v2a7 7 0 0 1-14 0v-2 M12 19v3 M8 22h8" />
+                        <path d="m11 7.601-5.994 8.19a1 1 0 0 0 .1 1.298l.817.818a1 1 0 0 0 1.314.087L15.09 12 M16.5 21.174C15.5 20.5 14.372 20 13 20c-2.058 0-3.928 2.356-6 2-2.072-.356-2.775-3.369-1.5-4.5 M21 7a5 5 0 1 1-10 0 5 5 0 1 1 10 0Z" />
                     </svg>
                     <span className="text-sm">Loading lyrics...</span>
                 </div>

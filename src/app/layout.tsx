@@ -53,9 +53,9 @@ export default function RootLayout({
                 <Separator orientation="vertical" className="h-4" />
                 <ModeToggle />
               </header>
-              <main className="h-full w-full">
+              <div className="h-full w-full">
                 {children}
-              </main>
+              </div>
             </SidebarInset>
             <LyricsSidebar />
             <QueueSidebar />
