@@ -1,7 +1,13 @@
 import { NextRequest } from "next/server";
 import { spawn } from "child_process";
+import path from "path";
 
 export const dynamic = "force-dynamic";
+
+// Get the project root directory
+const PROJECT_ROOT = path.resolve(process.cwd());
+const SCRIPTS_PATH = path.join(PROJECT_ROOT, "scripts");
+const DB_PATH = path.join(PROJECT_ROOT, "library.db");
 
 // Server-Sent Events stream for wrapper auth messages
 export async function GET(request: NextRequest) {
@@ -14,10 +20,21 @@ export async function GET(request: NextRequest) {
                 "-c",
                 `
 import sys
-sys.path.insert(0, '/home/sn0wst0rm/am-clone/scripts')
-from wrapper_manager import get_wrapper_manager
+import sqlite3
+from pathlib import Path
+sys.path.insert(0, '${SCRIPTS_PATH}')
+from wrapper_manager import get_wrapper_manager, init_wrapper_manager
 import json
 import time
+
+# Get library path from database and initialize wrapper manager
+conn = sqlite3.connect('${DB_PATH}')
+cursor = conn.cursor()
+cursor.execute("SELECT mediaLibraryPath FROM GamdlSettings WHERE id = 'singleton'")
+row = cursor.fetchone()
+conn.close()
+library_root = Path(row[0]) if row and row[0] else Path("./music")
+init_wrapper_manager(library_root)
 
 mgr = get_wrapper_manager()
 

@@ -5458,9 +5458,38 @@ class WrapperAuthSubmitRequest(BaseModel):
 @app.get("/wrapper/status")
 async def get_wrapper_status():
     """Get wrapper container and auth status."""
+    import sqlite3
+
+    # Get library path from database and initialize wrapper manager if needed
+    try:
+        db_path = Path(__file__).parent.parent / "library.db"
+        conn = sqlite3.connect(str(db_path))
+        cursor = conn.cursor()
+        cursor.execute("SELECT mediaLibraryPath FROM GamdlSettings WHERE id = 'singleton'")
+        row = cursor.fetchone()
+        conn.close()
+
+        if not row or not row[0]:
+            return {
+                "error": "Settings not configured",
+                "docker_available": False,
+                "image_available": False,
+                "message": "Please configure settings first"
+            }
+
+        library_root = Path(row[0])
+        init_wrapper_manager(library_root)
+    except Exception as e:
+        return {
+            "error": str(e),
+            "docker_available": False,
+            "image_available": False,
+            "message": str(e)
+        }
+
     mgr = get_wrapper_manager()
     docker_ok, image_ok, msg = mgr.get_availability()
-    
+
     return {
         "docker_available": docker_ok,
         "image_available": image_ok,
