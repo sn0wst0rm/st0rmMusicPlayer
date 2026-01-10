@@ -85,7 +85,7 @@ echo -e "${YELLOW}[3/6] Setting up database...${NC}"
 
 # Create .env file if it doesn't exist
 if [ ! -f ".env" ]; then
-    echo 'DATABASE_URL="file:./prisma/music.db"' > .env
+    echo 'DATABASE_URL="file:./library.db"' > .env
     echo -e "  ${GREEN}✓${NC} Created .env file"
 else
     echo -e "  ${GREEN}✓${NC} .env file already exists"
@@ -95,14 +95,10 @@ fi
 echo "  Generating Prisma client..."
 npx prisma generate
 
-# Create database if it doesn't exist
-if [ ! -f "prisma/music.db" ]; then
-    echo "  Creating database..."
-    npx prisma db push
-    echo -e "  ${GREEN}✓${NC} Database created"
-else
-    echo -e "  ${GREEN}✓${NC} Database already exists"
-fi
+# Create/update database schema (Prisma handles this gracefully)
+echo "  Syncing database schema..."
+npx prisma db push
+echo -e "  ${GREEN}✓${NC} Database ready"
 
 echo ""
 
