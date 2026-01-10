@@ -8,29 +8,29 @@ datasource db {
 }
 
 model Artist {
-    id            String    @id @default(uuid())
-    name          String    @unique
-    appleMusicId  String?   @unique // Apple Music artist ID
-    sortName      String? // For proper alphabetical sorting
+    id                  String    @id @default(uuid())
+    name                String    @unique
+    appleMusicId        String?   @unique // Apple Music artist ID
+    sortName            String? // For proper alphabetical sorting
     // Apple Music metadata
-    artworkUrl    String? // Apple Music artwork URL template
-    bio           String? // Artist biography/editorial notes (HTML)
-    genre         String? // Primary genre
-    origin        String? // Origin location (e.g., "Toronto, Canada")
-    birthDate     String? // Birth/formation date
-    url           String? // Apple Music artist URL
+    artworkUrl          String? // Apple Music artwork URL template
+    bio                 String? // Artist biography/editorial notes (HTML)
+    genre               String? // Primary genre
+    origin              String? // Origin location (e.g., "Toronto, Canada")
+    birthDate           String? // Birth/formation date
+    url                 String? // Apple Music artist URL
     // Extended Apple Music metadata
-    isGroup              Boolean? // Is this a band/group?
-    plainEditorialNotes  String? // Plain text bio (no HTML)
+    isGroup             Boolean? // Is this a band/group?
+    plainEditorialNotes String? // Plain text bio (no HTML)
     // Media file paths (in .metadata folder)
-    heroAnimatedPath     String? // Path to hero-animated.mp4
-    heroStaticPath       String? // Path to hero-static.jpg
-    profileImagePath     String? // Path to profile.jpg
-    lastFetchedAt DateTime? // When Apple Music data was last fetched
-    createdAt     DateTime  @default(now())
-    updatedAt     DateTime  @updatedAt
-    albums        Album[]
-    tracks        Track[]
+    heroAnimatedPath    String? // Path to hero-animated.mp4
+    heroStaticPath      String? // Path to hero-static.jpg
+    profileImagePath    String? // Path to profile.jpg
+    lastFetchedAt       DateTime? // When Apple Music data was last fetched
+    createdAt           DateTime  @default(now())
+    updatedAt           DateTime  @updatedAt
+    albums              Album[]
+    tracks              Track[]
 }
 
 model Album {
@@ -109,8 +109,9 @@ model Track {
     lyricsPronunciations String? // Comma-separated available pronunciation scripts
 
     // Apple Music identifiers
-    appleMusicId String? // Apple Music track ID (xid)
-    storefront   String? // Apple Music storefront (e.g., "us")
+    appleMusicId     String? // Apple Music track ID (xid)
+    storefront       String? // Apple Music storefront (e.g., "us")
+    isPrivateLibrary Boolean @default(false) // True if user-uploaded track (no catalog ID)
 
     // Sort fields (for proper alphabetical sorting)
     titleSort    String? // Sort title

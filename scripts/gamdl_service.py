@@ -58,6 +58,227 @@ def is_wrapper_required(codec: str) -> bool:
     return codec.lower() not in GAMDL_NATIVE_CODECS
 
 
+async def download_private_library_track(
+    api,
+    library_id: str,
+    output_path: Path,
+    progress_callback=None
+) -> dict | None:
+    """
+    Download a private/uploaded library track (not in Apple Music catalog).
+    
+    Private tracks are stored unencrypted in Apple's blobstore and can be
+    downloaded directly without FairPlay decryption.
+    
+    Args:
+        api: Initialized AppleMusicApi instance
+        library_id: Library track ID starting with 'i.' (e.g., 'i.KoJEDdbIYKQDzA')
+        output_path: Base output directory for downloads
+        progress_callback: Optional callback(stage, current, total, bytes, speed)
+        
+    Returns:
+        Dict with download info including file_path and metadata, or None on failure
+    """
+    import httpx
+    from mutagen.mp4 import MP4, MP4Cover
+    
+    print(f"[PRIVATE TRACK] Fetching playback info for {library_id}", flush=True)
+    
+    # Make direct API call to webPlayback with universalLibraryId
+    # This bypasses the gamdl library which only supports salableAdamId (catalog IDs)
+    WEBPLAYBACK_API_URL = "https://play.music.apple.com/WebObjects/MZPlay.woa/wa/webPlayback"
+    
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(
+                WEBPLAYBACK_API_URL,
+                headers={
+                    "Authorization": f"Bearer {api.token}",
+                    "x-apple-music-user-token": api.media_user_token,
+                    "Content-Type": "application/json",
+                    "Origin": "https://music.apple.com",
+                    "Referer": "https://music.apple.com/",
+                },
+                json={
+                    "universalLibraryId": library_id,
+                    "language": api.language,
+                },
+            )
+            
+            if response.status_code != 200:
+                print(f"[PRIVATE TRACK] API returned status {response.status_code} for {library_id}", flush=True)
+                return None
+            
+            playback = response.json()
+    except Exception as e:
+        print(f"[PRIVATE TRACK] API request failed: {e}", flush=True)
+        return None
+    
+    if not playback or not playback.get("songList"):
+        print(f"[PRIVATE TRACK] No playback info available for {library_id}", flush=True)
+        return None
+    
+    song_info = playback["songList"][0]
+    assets = song_info.get("assets", [])
+    if not assets:
+        print(f"[PRIVATE TRACK] No assets in playback info for {library_id}", flush=True)
+        return None
+    
+    asset = assets[0]
+    audio_url = asset.get("URL")
+    metadata = asset.get("metadata", {})
+    artwork_url = song_info.get("artworkURL")
+    
+    if not audio_url:
+        print(f"[PRIVATE TRACK] No audio URL in assets for {library_id}", flush=True)
+        return None
+    
+    print(f"[PRIVATE TRACK] Downloading from blobstore: {audio_url[:80]}...", flush=True)
+    
+    # Extract metadata
+    artist_name = metadata.get("artistName", "Unknown Artist")
+    album_name = metadata.get("playlistName", "Unknown Album")  # playlistName is the album for library tracks
+    track_name = metadata.get("itemName", "Unknown Track")
+    duration_ms = metadata.get("duration", 0)
+    genre = metadata.get("genre", "")
+    year = metadata.get("year", 0)
+    track_number = metadata.get("trackNumber", 0)
+    disc_number = metadata.get("discNumber", 0)
+    
+    # Create safe folder structure: Artist/Album/Track.m4a
+    safe_artist = "".join(c for c in artist_name if c.isalnum() or c in " -_").strip() or "Unknown Artist"
+    safe_album = "".join(c for c in album_name if c.isalnum() or c in " -_").strip() or "Unknown Album"
+    safe_track = "".join(c for c in track_name if c.isalnum() or c in " -_").strip() or "Unknown Track"
+    
+    track_folder = output_path / safe_artist / safe_album
+    track_folder.mkdir(parents=True, exist_ok=True)
+    
+    # Add track number prefix if available
+    if track_number > 0:
+        file_name = f"{track_number:02d} {safe_track}.m4a"
+    else:
+        file_name = f"{safe_track}.m4a"
+    
+    final_path = track_folder / file_name
+    
+    # Check if file already exists
+    if final_path.exists():
+        print(f"[PRIVATE TRACK] File already exists: {final_path}", flush=True)
+        return {
+            "file_path": str(final_path),
+            "library_id": library_id,
+            "already_exists": True,
+            "metadata": {
+                "title": track_name,
+                "artist": artist_name,
+                "album": album_name,
+                "duration_ms": duration_ms,
+                "genre": genre,
+                "year": year,
+                "track_number": track_number,
+                "disc_number": disc_number,
+            }
+        }
+    
+    # Download the audio file
+    import time
+    try:
+        async with httpx.AsyncClient(timeout=180.0) as client:
+            async with client.stream("GET", audio_url) as resp:
+                resp.raise_for_status()
+                
+                total_size = int(resp.headers.get("content-length", 0))
+                bytes_downloaded = 0
+                start_time = time.time()
+                last_progress_time = start_time
+                
+                temp_path = final_path.with_suffix(".tmp")
+                with open(temp_path, "wb") as f:
+                    async for chunk in resp.aiter_bytes(chunk_size=65536):
+                        f.write(chunk)
+                        bytes_downloaded += len(chunk)
+                        
+                        # Progress callback
+                        now = time.time()
+                        if progress_callback and (now - last_progress_time > 0.3):
+                            elapsed = now - start_time
+                            speed = bytes_downloaded / elapsed if elapsed > 0 else 0
+                            progress_callback('download', bytes_downloaded, total_size, bytes_downloaded, speed)
+                            last_progress_time = now
+                
+                # Final progress
+                if progress_callback:
+                    elapsed = time.time() - start_time
+                    speed = bytes_downloaded / elapsed if elapsed > 0 else 0
+                    progress_callback('download', bytes_downloaded, total_size, bytes_downloaded, speed)
+        
+        # Move temp to final
+        temp_path.rename(final_path)
+        print(f"[PRIVATE TRACK] Downloaded {bytes_downloaded:,} bytes to {final_path}", flush=True)
+        
+    except Exception as e:
+        print(f"[PRIVATE TRACK] Download failed: {e}", flush=True)
+        if temp_path.exists():
+            temp_path.unlink()
+        return None
+    
+    # Apply metadata tags
+    try:
+        audio = MP4(final_path)
+        audio["\xa9nam"] = track_name  # Title
+        audio["\xa9ART"] = artist_name  # Artist
+        audio["\xa9alb"] = album_name  # Album
+        audio["aART"] = artist_name  # Album Artist
+        if genre:
+            audio["\xa9gen"] = genre
+        if year > 0:
+            audio["\xa9day"] = str(year)
+        if track_number > 0:
+            audio["trkn"] = [(track_number, metadata.get("trackCount", 0))]
+        if disc_number > 0:
+            audio["disk"] = [(disc_number, metadata.get("discCount", 0))]
+        
+        # Download and embed artwork if available
+        if artwork_url:
+            try:
+                async with httpx.AsyncClient(timeout=30.0) as client:
+                    art_resp = await client.get(artwork_url)
+                    if art_resp.status_code == 200:
+                        content_type = art_resp.headers.get("content-type", "")
+                        if "jpeg" in content_type or "jpg" in content_type:
+                            image_format = MP4Cover.FORMAT_JPEG
+                        else:
+                            image_format = MP4Cover.FORMAT_PNG
+                        audio["covr"] = [MP4Cover(art_resp.content, imageformat=image_format)]
+                        print(f"[PRIVATE TRACK] Embedded artwork", flush=True)
+            except Exception as art_err:
+                print(f"[PRIVATE TRACK] Could not embed artwork: {art_err}", flush=True)
+        
+        audio.save()
+        print(f"[PRIVATE TRACK] Applied metadata tags", flush=True)
+        
+    except Exception as e:
+        print(f"[PRIVATE TRACK] Error applying tags: {e}", flush=True)
+        # File is still valid, just without tags
+    
+    return {
+        "file_path": str(final_path),
+        "library_id": library_id,
+        "already_exists": False,
+        "metadata": {
+            "title": track_name,
+            "artist": artist_name,
+            "album": album_name,
+            "duration_ms": duration_ms,
+            "genre": genre,
+            "year": year,
+            "track_number": track_number,
+            "disc_number": disc_number,
+            "artwork_url": artwork_url,
+        }
+    }
+
+
 import subprocess
 import re
 
@@ -1227,10 +1448,69 @@ async def download_tracks_for_sync(
         # Download each missing track
         for track_id in track_ids:
             try:
-                # Build song URL (song IDs are numeric)
+                # Handle library tracks (IDs starting with i.)
                 if track_id.startswith("i."):
-                    # Library track - need to get catalog ID
-                    continue  # Skip library-only tracks for now
+                    # Try to download as private/uploaded track first
+                    print(f"[SYNC] Processing library track {track_id}", flush=True)
+                    
+                    # Attempt private track download (unencrypted blobstore)
+                    result = await download_private_library_track(
+                        api=apple_music_api,
+                        library_id=track_id,
+                        output_path=output_path
+                    )
+                    
+                    if result:
+                        # Private track downloaded successfully
+                        final_path = result["file_path"]
+                        meta = result["metadata"]
+                        
+                        # Import to library database
+                        # Find or create artist
+                        cursor.execute("SELECT id FROM Artist WHERE name = ?", (meta["artist"],))
+                        artist_row = cursor.fetchone()
+                        if artist_row:
+                            artist_id = artist_row[0]
+                        else:
+                            artist_id = str(uuid.uuid4())
+                            cursor.execute("INSERT INTO Artist (id, name) VALUES (?, ?)", (artist_id, meta["artist"]))
+                        
+                        # Find or create album
+                        cursor.execute("SELECT id FROM Album WHERE title = ? AND artistId = ?", (meta["album"], artist_id))
+                        album_row = cursor.fetchone()
+                        if album_row:
+                            album_id = album_row[0]
+                        else:
+                            album_id = str(uuid.uuid4())
+                            cursor.execute(
+                                "INSERT INTO Album (id, title, artistId) VALUES (?, ?, ?)",
+                                (album_id, meta["album"], artist_id)
+                            )
+                        
+                        # Create track
+                        new_track_id = str(uuid.uuid4())
+                        cursor.execute(
+                            """INSERT INTO Track (id, title, filePath, duration, albumId, appleMusicId, trackNumber, isPrivateLibrary) 
+                               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                            (new_track_id, meta["title"], final_path, meta["duration_ms"], album_id, track_id, meta.get("track_number", 1), True)
+                        )
+                        
+                        # Add to playlist
+                        cursor.execute("SELECT MAX(position) FROM PlaylistTrack WHERE playlistId = ?", (playlist_id,))
+                        max_pos = cursor.fetchone()[0] or 0
+                        
+                        cursor.execute(
+                            "INSERT INTO PlaylistTrack (id, playlistId, trackId, position) VALUES (?, ?, ?, ?)",
+                            (str(uuid.uuid4()), playlist_id, new_track_id, max_pos + 1)
+                        )
+                        
+                        downloaded_count += 1
+                        print(f"[SYNC] ✅ Downloaded private track '{meta['title']}' to playlist '{playlist_name}'", flush=True)
+                        continue
+                    else:
+                        # Private track download failed, skip
+                        print(f"[SYNC] Could not download private library track {track_id}", flush=True)
+                        continue
                 
                 song_url = f"https://music.apple.com/us/song/{track_id}"
                 
@@ -4301,6 +4581,128 @@ async def download_song(request: DownloadRequest):
                     "total": total_tracks,
                     "codecs": codec_list, # Add codecs list
                 }))
+                
+                # Check if this is a private library track (user-uploaded, not in catalog)
+                # A track is private if:
+                # 1. It has a library ID (starts with i.)
+                # 2. AND it has NO catalog ID (no catalogId in playParams, or empty catalog relationship)
+                content_id = download_item.media_metadata.get("id")
+                attributes = download_item.media_metadata.get("attributes", {})
+                play_params = attributes.get("playParams", {})
+                catalog_id = play_params.get("catalogId")
+                
+                # Also check the catalog relationship for mapped tracks
+                relationships = download_item.media_metadata.get("relationships", {})
+                catalog_data = relationships.get("catalog", {}).get("data", [])
+                
+                is_library_track = content_id and content_id.startswith("i.")
+                has_catalog_mapping = bool(catalog_id) or len(catalog_data) > 0
+                is_private_library_track = is_library_track and not has_catalog_mapping
+                
+                if is_private_library_track:
+                    # Private library tracks use direct blobstore download (unencrypted)
+                    print(f"[DEBUG] Track {i+1}: Private library track detected ({content_id}), no catalog mapping, using blobstore download", flush=True)
+                    
+                    try:
+                        result = await download_private_library_track(
+                            api=apple_music_api,
+                            library_id=content_id,
+                            output_path=Path(request.output_path)
+                        )
+                        
+                        if result:
+                            final_path = result["file_path"]
+                            meta = result["metadata"]
+                            
+                            # Get file size for display
+                            file_size = Path(final_path).stat().st_size if Path(final_path).exists() else 0
+                            
+                            # Broadcast codec completion with file size
+                            asyncio.create_task(broadcast_ws_event("download_codec_complete", {
+                                "track_id": content_id,
+                                "codec": "private-library",
+                                "path": final_path,
+                                "success": True,
+                                "total_bytes": file_size,
+                                "bytes": file_size,  # Already complete
+                            }))
+                            
+                            # Broadcast download_complete to WebSocket clients (same as catalog tracks)
+                            # This is what triggers the frontend to import the track to the database
+                            asyncio.create_task(broadcast_ws_event("download_complete", {
+                                "track_id": content_id,
+                                "title": meta.get("title", "Unknown"),
+                                "artist": meta.get("artist", "Unknown"),
+                                "album": meta.get("album", "Unknown"),
+                                "file_path": final_path,
+                                "file_size": file_size,
+                                "codec_paths": {"private-library": final_path},
+                                "lyrics_path": None,
+                                "cover_path": None,
+                                "metadata": {
+                                    "title": meta.get("title", "Unknown"),
+                                    "artist": meta.get("artist", "Unknown"),
+                                    "album": meta.get("album", "Unknown"),
+                                    "duration": meta.get("duration_ms", 0) / 1000.0,
+                                    "trackNumber": meta.get("track_number"),
+                                    "discNumber": meta.get("disc_number"),
+                                    "genre": meta.get("genre"),
+                                    "appleMusicId": content_id,
+                                    "isPrivateLibrary": True,
+                                },
+                                "current": i + 1,
+                                "total": total_tracks,
+                            }))
+                            
+                            # Yield track complete event (for SSE stream if used)
+                            completed += 1
+                            track_complete_data = {
+                                "filePath": final_path,
+                                "codecPaths": {"private-library": final_path},
+                                "metadata": {
+                                    "title": meta.get("title", "Unknown"),
+                                    "artist": meta.get("artist", "Unknown"),
+                                    "album": meta.get("album", "Unknown"),
+                                    "duration": meta.get("duration_ms", 0) / 1000.0,
+                                    "trackNumber": meta.get("track_number"),
+                                    "discNumber": meta.get("disc_number"),
+                                    "genre": meta.get("genre"),
+                                    "appleMusicId": content_id,
+                                    "isPrivateLibrary": True,
+                                },
+                                "current": i + 1,
+                                "total": total_tracks,
+                            }
+                            print(f"[DEBUG] 📤 Broadcast download_complete for private track: {meta.get('title')}", flush=True)
+                            yield {
+                                "event": "track_complete",
+                                "data": json.dumps(track_complete_data),
+                            }
+                            
+                            print(f"[DEBUG] ✅ Private track {i+1} complete: {meta.get('title')}", flush=True)
+                            continue  # Skip the standard codec-based download loop
+                        else:
+                            print(f"[DEBUG] ❌ Failed to download private track {content_id}", flush=True)
+                            yield {
+                                "event": "track_error",
+                                "data": json.dumps({
+                                    "current": i + 1,
+                                    "total": total_tracks,
+                                    "error": f"Failed to download private library track {content_id}",
+                                }),
+                            }
+                            continue  # Skip to next track
+                    except Exception as private_err:
+                        print(f"[DEBUG] ❌ Error downloading private track: {private_err}", flush=True)
+                        yield {
+                            "event": "track_error",
+                            "data": json.dumps({
+                                "current": i + 1,
+                                "total": total_tracks,
+                                "error": str(private_err),
+                            }),
+                        }
+                        continue
                 
                 # For albums/playlists: Check per-track codec availability
                 # This filters the requested codecs to only those actually available for this track
