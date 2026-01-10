@@ -1,6 +1,6 @@
 {
-  "name": "apple-music-clone",
-  "version": "0.1.0",
+  "name": "st0rm-music",
+  "version": "1.0.0b",
   "private": true,
   "scripts": {
     "dev": "concurrently --names \"next,gamdl\" --prefix-colors \"cyan,magenta\" \"npm run dev:next\" \"npm run dev:gamdl\"",
