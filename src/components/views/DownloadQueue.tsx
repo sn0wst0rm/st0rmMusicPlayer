@@ -148,6 +148,10 @@ export function DownloadQueue({ open, onClose }: DownloadQueueProps) {
                         <div className="flex items-center gap-1.5">
                             <Clock className="h-3.5 w-3.5 text-muted-foreground" />
                             <span className="text-muted-foreground">Queued:</span>
+                            <span className="font-medium">{items.filter(i => i.status === 'queued' || i.status === 'pending').length}</span>
+                        </div>
+                        <div className="flex items-center gap-1.5">
+                            <DownloadIcon className="h-3.5 w-3.5 text-blue-500" />
                             <span className="text-muted-foreground">Active:</span>
                             <span className="font-medium">{stats.activeDownloads}</span>
                         </div>
@@ -159,7 +163,7 @@ export function DownloadQueue({ open, onClose }: DownloadQueueProps) {
                         <div className="flex items-center gap-1.5">
                             <FileText className="h-3.5 w-3.5 text-amber-500" />
                             <span className="text-muted-foreground">Skipped:</span>
-                            <span className="font-medium">0</span>
+                            <span className="font-medium">{items.filter(i => i.status === 'skipped').length}</span>
                         </div>
                         <div className="flex items-center gap-1.5">
                             <XCircle className="h-3.5 w-3.5 text-red-500" />

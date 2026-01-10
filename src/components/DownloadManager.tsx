@@ -32,19 +32,92 @@ export function DownloadManager() {
                 const type = message.type
                 const data = message.data || {}
 
-                if (type === 'download_started') {
+                if (type === 'download_queued') {
                     const queue = usePlayerStore.getState().downloadQueue
 
-                    // Check if there's already a downloading entry for this track
-                    const existingItem = queue.find(i => i.trackId === data.track_id && i.status === 'downloading')
-
+                    // Check if this track is already in the queue
+                    const existingItem = queue.find(i => i.trackId === data.track_id)
                     if (existingItem) {
-                        // Already tracking this track - skip duplicate
-                        console.log(`[DownloadManager] download_started: Item already exists for ${data.track_id}, skipping duplicate`)
+                        // Already tracking this track - skip
                         return
                     }
 
-                    // Generate unique ID for this download session
+                    // Generate unique ID for this queued item
+                    const uniqueId = `${data.track_id}-queued-${Date.now()}`
+
+                    // Initialize codec placeholders
+                    const codecStatus: Record<string, 'pending' | 'downloading' | 'decrypting' | 'completed' | 'failed'> = {}
+                    const codecProgress: Record<string, number> = {}
+
+                    if (data.codecs && Array.isArray(data.codecs)) {
+                        data.codecs.forEach((c: string) => {
+                            codecStatus[c] = 'pending'
+                            codecProgress[c] = 0
+                        })
+                    }
+
+                    addDownloadItem({
+                        id: uniqueId,
+                        trackId: data.track_id,
+                        title: data.title,
+                        artist: data.artist,
+                        album: data.album,
+                        status: 'queued',
+                        progress: 0,
+                        totalTracks: data.total,
+                        completedTracks: 0,
+                        addedAt: Date.now(),
+                        codecStatus,
+                        codecProgress,
+                        downloadedCodecs: []
+                    })
+                }
+                else if (type === 'download_started') {
+                    const queue = usePlayerStore.getState().downloadQueue
+
+                    // Check if there's already an entry for this track (queued or downloading)
+                    const existingItem = queue.find(i => i.trackId === data.track_id)
+
+                    if (existingItem) {
+                        if (existingItem.status === 'downloading') {
+                            // Already downloading - skip duplicate
+                            console.log(`[DownloadManager] download_started: Item already downloading for ${data.track_id}, skipping`)
+                            return
+                        }
+
+                        // Update queued item to downloading
+                        const codecStatus: Record<string, 'pending' | 'downloading' | 'decrypting' | 'completed' | 'failed'> = {}
+                        const codecProgress: Record<string, number> = {}
+                        const codecTotalBytes: Record<string, number> = {}
+                        const codecLoadedBytes: Record<string, number> = {}
+                        const codecSpeed: Record<string, number> = {}
+
+                        if (data.codecs && Array.isArray(data.codecs)) {
+                            data.codecs.forEach((c: string) => {
+                                codecStatus[c] = 'pending'
+                                codecProgress[c] = 0
+                                codecTotalBytes[c] = 0
+                                codecLoadedBytes[c] = 0
+                                codecSpeed[c] = 0
+                            })
+                        }
+
+                        updateDownloadItem(existingItem.id, {
+                            status: 'downloading',
+                            codecStatus,
+                            codecProgress,
+                            codecTotalBytes,
+                            codecLoadedBytes,
+                            codecSpeed,
+                            loadedBytes: 0,
+                            totalBytes: 0,
+                            speed: 0,
+                            eta: 0,
+                        })
+                        return
+                    }
+
+                    // No existing item - create new one
                     const uniqueId = `${data.track_id}-${Date.now()}`
 
                     // Initialize codec status for all expected codecs
@@ -160,19 +233,26 @@ export function DownloadManager() {
 
                         updateDownloadItem(item.id, updates)
 
-                        // Update Global Stats
-                        const allItems = usePlayerStore.getState().downloadQueue
-                        const currentGlobalSpeed = allItems.reduce((acc, i) => {
-                            if (i.id === item.id) return acc + (updates.speed || 0)
-                            return acc + (i.speed || 0)
-                        }, 0)
+                        // Update Global Stats - calculate speed from codec speeds
+                        // Use a slight delay to ensure store is updated
+                        setTimeout(() => {
+                            const allItems = usePlayerStore.getState().downloadQueue
+                            let currentGlobalSpeed = 0
+                            let totalQueueSize = 0
 
-                        const totalQueueSize = allItems.reduce((acc, i) => {
-                            if (i.id === item.id) return acc + (updates.totalBytes || 0)
-                            return acc + (i.totalBytes || 0)
-                        }, 0)
+                            allItems.forEach(i => {
+                                if (i.status === 'downloading') {
+                                    // Sum codec speeds for this item
+                                    const itemSpeed = Object.values(i.codecSpeed || {}).reduce((a, b) => a + b, 0)
+                                    currentGlobalSpeed += itemSpeed
+                                }
+                                // Sum total bytes
+                                const itemTotalBytes = Object.values(i.codecTotalBytes || {}).reduce((a, b) => a + b, 0)
+                                totalQueueSize += itemTotalBytes
+                            })
 
-                        usePlayerStore.getState().updateDownloadStats({ currentSpeed: currentGlobalSpeed, totalQueueSize })
+                            usePlayerStore.getState().updateDownloadStats({ currentSpeed: currentGlobalSpeed, totalQueueSize })
+                        }, 10)
                     }
                 }
                 else if (type === 'download_codec_started') {

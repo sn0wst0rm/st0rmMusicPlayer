@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import {
     Dialog,
     DialogContent,
@@ -59,6 +59,7 @@ export function WrapperLoginModal({
         null
     );
     const [eventSource, setEventSource] = useState<EventSource | null>(null);
+    const authCompletedRef = useRef(false);
 
     // Define handleAuthMessage first (used by startWrapperAuth)
     const handleAuthMessage = useCallback((data: {
@@ -103,6 +104,7 @@ export function WrapperLoginModal({
                 break;
 
             case "auth_success":
+                authCompletedRef.current = true;
                 setAuthState("success");
                 if (onAuthSuccess) {
                     onAuthSuccess({
@@ -135,8 +137,11 @@ export function WrapperLoginModal({
             };
 
             es.onerror = () => {
-                setError("Connection to wrapper lost");
-                setAuthState("error");
+                // Don't show error if auth already completed successfully
+                if (!authCompletedRef.current) {
+                    setError("Connection to wrapper lost");
+                    setAuthState("error");
+                }
                 es.close();
             };
         } catch (e) {
@@ -148,6 +153,7 @@ export function WrapperLoginModal({
     // Reset state when modal opens
     useEffect(() => {
         if (open) {
+            authCompletedRef.current = false;
             setAuthState("connecting");
             setError(null);
             setDialogMessage(null);
@@ -155,14 +161,17 @@ export function WrapperLoginModal({
 
             // Start wrapper and connect to auth stream
             startWrapperAuth();
-        } else {
-            // Cleanup on close
-            if (eventSource) {
-                eventSource.close();
-                setEventSource(null);
-            }
         }
-    }, [open, eventSource, startWrapperAuth]);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [open]);
+
+    // Cleanup eventSource when modal closes or component unmounts
+    useEffect(() => {
+        if (!open && eventSource) {
+            eventSource.close();
+            setEventSource(null);
+        }
+    }, [open, eventSource]);
 
     const handleSubmitCredentials = async () => {
         if (!email || !password) {
