@@ -18,7 +18,8 @@ function SearchPageContent() {
         setSearchQuery,
         setSelectedAlbum,
         library,
-        setLibrary
+        setLibrary,
+        navigateToArtist
     } = usePlayerStore()
 
     const [loading, setLoading] = React.useState(library.length === 0)
@@ -77,6 +78,11 @@ function SearchPageContent() {
         router.push(`/album/${album.id}`)
     }
 
+    const selectArtist = (artistName: string) => {
+        navigateToArtist(artistName)
+        router.push('/artists')
+    }
+
     if (loading) {
         return (
             <div className="flex h-screen items-center justify-center">
@@ -90,6 +96,7 @@ function SearchPageContent() {
             playTrack={playTrack}
             playAlbum={playAlbum}
             onSelectAlbum={selectAlbum}
+            onSelectArtist={selectArtist}
         />
     )
 }
