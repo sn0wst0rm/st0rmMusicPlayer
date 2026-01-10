@@ -511,42 +511,51 @@ export async function GET(request: Request, { params }: RouteParams) {
                                     sendEvent('queue_ready', { totalTracks });
                                 }
 
-                                if (currentEventType === 'track_complete' && data.filePath && data.metadata) {
-                                    // Track completed - insert into library
-                                    const { albumId, artistId, trackId } = await insertTrackToLibrary(data as TrackCompleteEvent);
-                                    tracksComplete++;
+                                if (currentEventType === 'track_complete') {
+                                    console.log('[SSE] Processing track_complete event:', {
+                                        hasFilePath: !!data.filePath,
+                                        hasMetadata: !!data.metadata,
+                                        filePath: data.filePath,
+                                        metadata: data.metadata
+                                    });
 
-                                    // If this is a playlist import, add track to playlist
-                                    if (playlistId && trackId) {
-                                        await db.playlistTrack.create({
+                                    if (data.filePath && data.metadata) {
+                                        // Track completed - insert into library
+                                        const { albumId, artistId, trackId } = await insertTrackToLibrary(data as TrackCompleteEvent);
+                                        tracksComplete++;
+
+                                        // If this is a playlist import, add track to playlist
+                                        if (playlistId && trackId) {
+                                            await db.playlistTrack.create({
+                                                data: {
+                                                    playlistId,
+                                                    trackId,
+                                                    position: tracksComplete // Use order of download as position
+                                                }
+                                            });
+                                            console.log(`[DEBUG] Added track ${trackId} to playlist ${playlistId} at position ${tracksComplete}`);
+                                        }
+
+                                        await db.importJob.update({
+                                            where: { id: jobId },
                                             data: {
-                                                playlistId,
-                                                trackId,
-                                                position: tracksComplete // Use order of download as position
+                                                tracksComplete,
+                                                progress: totalTracks > 0
+                                                    ? Math.round((tracksComplete / totalTracks) * 100)
+                                                    : 0,
+                                                // Store imported IDs for navigation (last one wins)
+                                                importedAlbumId: albumId,
+                                                importedArtistId: artistId
                                             }
                                         });
-                                        console.log(`[DEBUG] Added track ${trackId} to playlist ${playlistId} at position ${tracksComplete}`);
+
+                                        sendEvent('track_complete', {
+                                            current: tracksComplete,
+                                            total: totalTracks,
+                                            title: data.metadata.title,
+                                            artist: data.metadata.artist
+                                        });
                                     }
-
-                                    await db.importJob.update({
-                                        where: { id: jobId },
-                                        data: {
-                                            tracksComplete,
-                                            progress: totalTracks > 0
-                                                ? Math.round((tracksComplete / totalTracks) * 100)
-                                                : 0,
-                                            // Store imported IDs for navigation (last one wins)
-                                            importedAlbumId: albumId,
-                                            importedArtistId: artistId
-                                        }
-                                    });
-
-                                    sendEvent('track_complete', {
-                                        current: tracksComplete,
-                                        total: totalTracks,
-                                        title: data.metadata.title,
-                                        artist: data.metadata.artist
-                                    });
                                 }
 
                                 if (currentEventType === 'complete' || data.status === 'success') {

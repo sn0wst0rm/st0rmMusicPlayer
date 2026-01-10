@@ -318,17 +318,108 @@ export async function POST(req: Request) {
             const isFinished = current >= total;
 
             try {
-                await db.importJob.update({
-                    where: { id: jobId },
-                    data: {
-                        status: isFinished ? 'complete' : 'downloading',
-                        progress: Math.floor((current / total) * 100),
-                        tracksComplete: current,
-                        tracksTotal: total, // Fix: also save total tracks count
-                        importedAlbumId: result.albumId, // Link outcome
-                        importedArtistId: result.artistId
+                // Get job to check if it's a playlist import
+                const job = await db.importJob.findUnique({ where: { id: jobId } });
+
+                if (job && job.type === 'playlist') {
+                    // Handle playlist creation and track linking
+                    let playlistId = job.importedPlaylistId;
+
+                    if (!playlistId) {
+                        // Create playlist on first track
+                        // Extract Apple Music playlist ID from URL
+                        const urlMatch = job.url.match(/\/playlist\/(?:[^/]+\/)?((?:pl|p)\.[a-zA-Z0-9-]+)/);
+                        const appleMusicPlaylistId = urlMatch ? urlMatch[1] : null;
+
+                        // Check if playlist already exists
+                        let existingPlaylist = null;
+                        if (appleMusicPlaylistId) {
+                            existingPlaylist = await db.playlist.findUnique({
+                                where: { appleMusicId: appleMusicPlaylistId }
+                            });
+                        }
+
+                        if (!existingPlaylist && job.globalId) {
+                            existingPlaylist = await db.playlist.findUnique({
+                                where: { globalId: job.globalId }
+                            });
+                        }
+
+                        if (existingPlaylist) {
+                            playlistId = existingPlaylist.id;
+                        } else {
+                            // Create new playlist
+                            const newPlaylist = await db.playlist.create({
+                                data: {
+                                    name: job.title,
+                                    description: job.description || null,
+                                    appleMusicId: appleMusicPlaylistId,
+                                    globalId: job.globalId || null,
+                                    artworkUrl: job.artworkUrl || null,
+                                    isSynced: true,
+                                    lastSyncedAt: new Date(),
+                                }
+                            });
+                            playlistId = newPlaylist.id;
+                            console.log(`[ImportComplete] Created playlist: ${newPlaylist.id} - ${newPlaylist.name}`);
+                        }
                     }
-                });
+
+                    // Add track to playlist
+                    if (playlistId && result.trackId) {
+                        // Check if track is already in playlist (avoid duplicates)
+                        const existingLink = await db.playlistTrack.findFirst({
+                            where: {
+                                playlistId,
+                                trackId: result.trackId
+                            }
+                        });
+
+                        if (!existingLink) {
+                            // Get next position
+                            const maxPos = await db.playlistTrack.aggregate({
+                                where: { playlistId },
+                                _max: { position: true }
+                            });
+
+                            await db.playlistTrack.create({
+                                data: {
+                                    playlistId,
+                                    trackId: result.trackId,
+                                    position: (maxPos._max.position || 0) + 1
+                                }
+                            });
+                            console.log(`[ImportComplete] Added track ${result.trackId} to playlist ${playlistId}`);
+                        }
+                    }
+
+                    // Update job with playlist reference
+                    await db.importJob.update({
+                        where: { id: jobId },
+                        data: {
+                            status: isFinished ? 'complete' : 'downloading',
+                            progress: Math.floor((current / total) * 100),
+                            tracksComplete: current,
+                            tracksTotal: total,
+                            importedAlbumId: result.albumId,
+                            importedArtistId: result.artistId,
+                            importedPlaylistId: playlistId
+                        }
+                    });
+                } else {
+                    // Non-playlist import (album/song)
+                    await db.importJob.update({
+                        where: { id: jobId },
+                        data: {
+                            status: isFinished ? 'complete' : 'downloading',
+                            progress: Math.floor((current / total) * 100),
+                            tracksComplete: current,
+                            tracksTotal: total,
+                            importedAlbumId: result.albumId,
+                            importedArtistId: result.artistId
+                        }
+                    });
+                }
             } catch (jobErr) {
                 console.error("Failed to update import job:", jobErr);
             }
