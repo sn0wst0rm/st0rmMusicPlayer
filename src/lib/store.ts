@@ -64,7 +64,7 @@ export interface DownloadItem {
     artist: string
     album: string
     artworkUrl?: string
-    status: 'pending' | 'downloading' | 'completed' | 'failed'
+    status: 'queued' | 'pending' | 'downloading' | 'completed' | 'failed' | 'skipped'
     reason?: string // Failure reason
     fileSize?: number // Total size in bytes (sum of all codecs)
     filePath?: string // Path to downloaded file
