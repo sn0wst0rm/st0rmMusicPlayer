@@ -470,10 +470,7 @@ async def download_animated_cover(
         
         if result.returncode != 0:
             print(f"[ANIMATED COVER] Palette generation failed: {result.stderr.decode()[:500]}", flush=True)
-            # Generate small, optimized GIF (seamless loop)
-            # Resize filter should be part of the complex filter chain?
-            # Or we can just use the same filter logic but change scale.
-            
+            # Generate small GIF with seamless loop crossfade (fallback without palette)
             filter_complex_small = (
                 f"[0]split[body][pre];"
                 f"[pre]trim=start={start_trim}:duration={fade_dur},setpts=PTS-STARTPTS[fade];"
@@ -498,33 +495,7 @@ async def download_animated_cover(
             )
         else:
             # Use palette for high quality GIF with seamless loop crossfade
-            # Crossfade logic:
-            # 1. Split input into two streams
-            # 2. Trim stream 1 to exclude the fade-out part (start=4:duration=1 is assuming 5s total, but we need to be dynamic)
-            # Actually, since we don't know exact duration here, we rely on the fact that most are short loops.
-            # But the complex filter derived earlier was specific to 5s.
-            # For a generic solution, we should probably stick to a simple loop if we can't guarantee 5s.
-            # However, the user issue was specifcally about the abrupt jump.
-            # Providing a generic crossfade filter for "end to start" overlap:
-            # We will use a safe 0.5s crossfade.
-            
-            # Simple Palette Generation (unchanged, just scale/fps)
-            # We can't easily do complex filter in palettegen if we don't know duration.
-            # So we will just generate palette from the raw MP4 (it's fine, colors won't change much).
-            
-            # But the final GIF generation needs the filter.
-            # The filter used in the script was:
-            # [0]split[body][pre];
-            # [pre]trim=start=4:duration=1...
-            # This requires knowing the duration (5s) and start time (4s).
-            # To do this generically in python, we need to probe the file first.
-            
-            # Since I cannot easily add probing logic here without refactoring, 
-            # and the user confirmed the MP4 is 5.0s, I will apply the filter assuming 5s for now 
-            # OR I can add a quick probe.
-            
-            # PROBING DURATION:
-            # We already have mp4_path.
+            # Probe duration to calculate dynamic crossfade timing
             cmd_probe = ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", str(mp4_path)]
             try:
                 probe_res = subprocess.run(cmd_probe, capture_output=True, text=True)
@@ -5114,25 +5085,8 @@ async def download_song(request: DownloadRequest):
                     # Map lyrics format from request
                     lyric_target_exists = False
                     if request.lyrics_format != "none":
-                        # Check for lyrics file with same base name as the primary file
-                        # Since we renamed the audio file, the lyrics might not match if they were moved blindly
-                        # But we moved extras.
-                        # Standard gamdl naming for lyrics matches audio filename base.
-                        # Since we renamed audio to "Title [Codec]", we need to check if lyrics were renamed?
-                        # No, we moved extras "as is" or with original name.
-                        # If we moved "Title.lrc", it won't match "Title [Codec].m4a".
-                        # This is a small issue. We should rename lyrics to match the primary audio file?
-                        # Or just look for "Title.lrc".
+                        # Lyrics files use clean stem (without codec tag) since audio was renamed to "Title [Codec].m4a"
                         pass
-                        
-                    # Re-implement lyrics discovery based on Primary File Path stem
-                    # If primary file is "Title [Codec].m4a", we look for "Title [Codec].lrc"?
-                    # Or just "Title.lrc"?
-                    # The code below uses Path(file_path).with_suffix().
-                    # So it looks for "Title [Codec].lrc".
-                    # But we saved "Title.lrc" (probably).
-                    
-                    # We should rename the lyrics file to match the primary audio file if we want them associated.
                     
                         # Calculate clean base path for lyrics (without codec tags)
                         try:
@@ -5214,16 +5168,8 @@ async def download_song(request: DownloadRequest):
                                 print(f"[LYRICS] Error fetching lyrics: {lyrics_err}", flush=True)
                                 traceback.print_exc()
                     
-                    # Find lyrics file - heuristic: check for .lrc with same base name (ignoring [Codec])
-                    # or just check specific patterns since we moved them "as is"
+                    # Fallback: find lyrics by stripping codec tag from filename
                     if not lyrics_path and request.lyrics_format != "none":
-                        # Try to find matching lyrics file
-                        # Since we renamed audio to "Title [Codec].m4a", the lyrics are likely "Title.lrc"
-                        # We can try to guess "Title.lrc" by stripping " [Codec]"
-                        # But better: just pass the lyrics path if we found it in the loop?
-                        # For simplicity, let's look for the .lrc file corresponding to the *renamed* file first (unlikely)
-                        # then the base name.
-                        
                         base_stem = Path(file_path).stem
                         # Try stripping known codec suffixes
                         for c_name in codec_list:

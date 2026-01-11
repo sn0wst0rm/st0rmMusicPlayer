@@ -113,11 +113,6 @@ export function SearchView({ playTrack, playAlbum, onSelectAlbum, onSelectArtist
         )
     }
 
-    // Show previous results or spinner if waiting for debounce? 
-    // Actually, keeping old results is better UX than flashing a spinner on every letter
-    // But if there are no results yet, maybe show spinner?
-    // For now, let's just let it be responsive. The delay is short (300ms).
-
     const hasResults = searchResults.songs.length > 0 || searchResults.albums.length > 0 || searchResults.artists.length > 0
 
     if (!isSearching && !hasResults && debouncedSearchQuery) {

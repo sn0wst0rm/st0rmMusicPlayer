@@ -107,7 +107,7 @@ export async function generateCovers(albumId: string, audioFilePath: string) {
     await Promise.all([
         sharp(imageBuffer).resize(96).jpeg({ quality: 80 }).toFile(smallPath),
         sharp(imageBuffer).resize(512).jpeg({ quality: 80 }).toFile(mediumPath),
-        sharp(imageBuffer).jpeg({ quality: 90 }).toFile(largePath), // Keep original size but convert to jpeg for consistency? Or just save original? requested "original" but consistent format is easier for serving.
+        sharp(imageBuffer).jpeg({ quality: 90 }).toFile(largePath),
     ]);
 
     // 4. Update Database

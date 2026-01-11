@@ -346,25 +346,7 @@ export function ImportView({ autoFocusUrl = false, initialUrl }: ImportViewProps
                 }
                 // Note: download_started is handled globally in player.tsx to avoid duplicates
                 else if (type === 'download_codec_started') {
-                    // Initialize codec status
-                    updateDownloadItem(data.track_id, {
-                        codecStatus: {
-                            // We need to merge with existing state, but zustand updates are shallow merges?
-                            // No, our reducer does spread on item, but we need to pass the FULL nested object or handle deep merge manually in the component
-                            // Easier: Let's assume the store helper does a shallow merge of the item properties.
-                            // So for nested objects like codecStatus, we need to read previous state? 
-                            // We can't easily access previous item state here without `usePlayerStore.getState()`.
-
-                            // Actually, let's use the functional update pattern if possible, or just read from store:
-                            // usePlayerStore.getState().downloadQueue...
-                        }
-                    })
-
-                    // Since we can't do functional update on specific item easily via the exposed action (which takes values),
-                    // We'll trust that we can just update the specific fields.
-                    // But wait, `updateDownloadItem` does `{ ...item, ...updates }`.
-                    // So if we pass `codecStatus`, it replaces the WHOLE codecStatus object.
-
+                    // Merge with existing codec status from store (shallow merge requires full object)
                     const queue = usePlayerStore.getState().downloadQueue
                     const item = queue.find(i => i.id === data.track_id)
                     if (item) {
@@ -401,19 +383,7 @@ export function ImportView({ autoFocusUrl = false, initialUrl }: ImportViewProps
                     }
                 }
                 else if (type === 'download_complete') {
-                    const queue = usePlayerStore.getState().downloadQueue
-                    const item = queue.find(i => i.id === data.metadata?.appleMusicId) // ID mismatch possible?
-                    // gamdl returns IDs. Let's hope track_id in events matches.
-                    // 'download_complete' data uses 'metadata.appleMusicId' usually?
-                    // The 'download_started' used 'track_id'.
-                    // We should verify strict ID usage.
-
-                    // Mark as complete in global queue
-                    // Actually, let's look up by track_id if available, or fallback.
-                    // We might not have track_id in download_complete event data from python?
-                    // Let's assume we do or can infer it.
-
-                    // Also update Import Jobs list for valid live counts
+                    // Update import job progress
                     setImportJobs(prev => prev.map(job => {
                         if (job.id === jobIdRef.current) {
                             return { ...job, tracksComplete: data.current }
@@ -460,11 +430,6 @@ export function ImportView({ autoFocusUrl = false, initialUrl }: ImportViewProps
                             fetchImportJobs()
                             refreshLibrary()
                             refreshPlaylists()
-
-                            // Remove from global queue? Or keep as history?
-                            // Plan says "retains history". So keep it.
-                            // Maybe mark item as 'completed'
-                            // We need to know which item it was.
                         }
 
                     } catch (dbErr) {
@@ -660,13 +625,6 @@ export function ImportView({ autoFocusUrl = false, initialUrl }: ImportViewProps
 
             setTimeout(() => {
                 setIsSuccess(false)
-                // We keep isDownloading true until complete? 
-                // Actually the button should probably revert to allow more downloads if it's a batch?
-                // But for now, let's just complete the tick animation.
-
-                // If we want to allow user to navigate away or download more, 
-                // we shouldn't block UI with isDownloading.
-                // But existing logic uses it to show progress on the button.
             }, 3000)
 
         } catch (err: unknown) {

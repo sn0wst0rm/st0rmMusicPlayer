@@ -16,7 +16,7 @@ export async function GET(
         const sizeParam = url.searchParams.get("size"); // 'small', 'medium', 'large'
         const size: CoverSize = (sizeParam === 'small' || sizeParam === 'medium' || sizeParam === 'large')
             ? sizeParam
-            : 'large'; // Default to large/original if not specified, or maybe medium? Let's stick to large to match old behavior best.
+            : 'large';
 
         // 1. Resolve Album ID from Track ID
         // The 'id' parameter is a Track ID.
@@ -69,8 +69,7 @@ export async function GET(
         return new NextResponse(fileBuffer, {
             headers: {
                 "Content-Type": contentType,
-                "Cache-Control": "public, max-age=86400, mutable", // mutable because we might update it? actually immutable is better for versioned urls, but here URL is stable. 
-                // Let's use standard caching.
+                "Cache-Control": "public, max-age=86400",
             },
         });
 

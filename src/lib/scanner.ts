@@ -76,26 +76,11 @@ async function processFile(filePath: string) {
     });
 
     // 4. Upsert Track
-    // Check if this is an mp3 or generic audio
+    // m4a files are treated as source, mp3 files as derivatives
     const isMp3 = path.extname(filePath).toLowerCase() === '.mp3';
 
-    // Strategy:
-    // If we find an m4a, we treat it as an original.
-    // If we find an mp3, we need to check if it's an "original" mp3 or a conversion of an m4a.
-    // For simplicity:
-    // - If file is m4a, upsert Track with filePath = m4a.
-    // - If file is mp3, check if a generic track exists (by title/album/artist? or just assume it might be a conversion).
-    //
-    // Revised Strategy:
-    // We index everything.
-    // If we find an m4a, we set filePath.
-    // If we find an mp3, we set mp3Path IF a track with same title/album exists? 
-    // OR we just allow multiple tracks?
-    // User wants "automatically converts the m4a files to the best mp3".
-    // This implies the m4a is the source. The mp3 is the derivative.
-
     if (!isMp3) {
-        // This is a source file (likely m4a)
+        // Source file (m4a)
         await db.track.upsert({
             where: { filePath: filePath },
             create: {

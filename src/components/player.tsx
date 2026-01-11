@@ -750,12 +750,6 @@ function PlayerCoverImage({ currentTrack, library, isCoverLoaded, setIsCoverLoad
             const img = new Image();
             img.src = animatedSrc;
             img.onload = () => {
-                // Only switch if this is still the relevant track/cover
-                // (Closure captures the scope, but good to be reactive if we used extensive refs, 
-                // but here effectively if the component unmounts/updates dependencies this effect cleans up implicitely by being superseded)
-                // Actually to be safe we can check if we are still mounted or just rely on react state update stability.
-                // React state updates on unmounted components are warned but generally safe-ish, 
-                // but let's assume standard behavior.
                 setActiveSrc(animatedSrc);
                 console.log('[PlayerCoverImage] Switched to animated cover');
             };
@@ -767,11 +761,6 @@ function PlayerCoverImage({ currentTrack, library, isCoverLoaded, setIsCoverLoad
 
     return (
         <img
-            // Key changes only when track changes, not when upgrading to animated
-            // This allows the browser to potentially crossfade or just replace content smoothly
-            // actually, changing src without key change is standard.
-            // But we might want to trigger fade loop?
-            // Simple src swap is fine for now.
             key={currentTrack?.id || "empty"}
             src={activeSrc || staticCoverPath} // Fallback to static if active is empty
             alt={currentTrack?.title || "Cover"}

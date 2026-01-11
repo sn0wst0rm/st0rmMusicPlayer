@@ -12,14 +12,7 @@ OUT_DUR=$(echo "$TOTAL_DUR - $FADE_DUR" | bc)
 
 echo "Generating seamless loop with ${FADE_DUR}s crossfade..."
 
-# 1. Generate palette for high quality GIF (using the crossfaded video stream)
-# We use a complex filter to:
-# 1. Split input into two streams
-# 2. Trim stream 1 to exclude the fade-out part (0 to END-FADE)
-# 3. Trim stream 2 to contain ONLY the fade-out part (END-FADE to END)
-# 4. Apply fade-in to stream 2? No, we need to overlap.
-
-# Standard Crossfade Loop Logic:
+# Crossfade Loop Logic for seamless GIF:
 # Take last N seconds.
 # Overlay them on top of the first N seconds with a fade-in.
 # Trim the video to exclude the last N seconds (since they are now at the start).
