@@ -14,7 +14,6 @@ import logging
 import os
 import socket
 import struct
-import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import BinaryIO, List, Optional
@@ -410,23 +409,21 @@ def write_decrypted_m4a(
     output_path: str,
     song_info: SongInfo,
     decrypted_data: bytes,
-    mp4decrypt_path: str = "mp4decrypt",
     original_path: str = None,
 ) -> None:
     """
     Write decrypted MP4 file as non-fragmented MP4.
-    
+
     Creates a new MP4 from scratch with:
     - ftyp box (M4A compatible)
     - moov box with proper sample tables (stts, stsc, stsz, stco)
     - Single mdat box with all decrypted samples
-    
+
     This matches the output format of Go's amdecrypt which is required
     for ALAC playback.
     """
-    temp_path = output_path + ".tmp.m4a"
-    
     # Extract stsd content and timescale from original moov
+    # Note: _extract_stsd_content automatically cleans encryption metadata
     stsd_content = None
     timescale = 44100  # Default
     if original_path:
@@ -437,41 +434,20 @@ def write_decrypted_m4a(
     elif song_info.moov_data:
         stsd_content = _extract_stsd_content(song_info.ftyp_data + song_info.moov_data)
         timescale = _extract_timescale(song_info.moov_data)
-    
-    with open(temp_path, "wb") as f:
+
+    with open(output_path, "wb") as f:
         # Write ftyp
         _write_ftyp(f)
-        
+
         # Calculate total duration
         total_duration = sum(s.duration for s in song_info.samples)
-        
+
         # Write moov with sample tables
         _write_moov(f, song_info.samples, total_duration, timescale, stsd_content, decrypted_data)
-        
+
         # Write mdat
         _write_mdat(f, decrypted_data)
-    
-    # Use mp4decrypt to clean up the file (removes any stale encryption metadata)
-    try:
-        result = subprocess.run(
-            [
-                mp4decrypt_path,
-                "--key", "00000000000000000000000000000000:00000000000000000000000000000000",
-                temp_path,
-                output_path,
-            ],
-            capture_output=True,
-            text=True,
-        )
-        if result.returncode != 0:
-            # mp4decrypt may fail on non-fragmented, just use temp as output
-            logger.debug(f"mp4decrypt returned {result.returncode}, using raw output")
-            os.rename(temp_path, output_path)
-        else:
-            os.remove(temp_path)
-    except FileNotFoundError:
-        os.rename(temp_path, output_path)
-    
+
     logger.info(f"Wrote decrypted file to {output_path}")
 
 
@@ -722,14 +698,202 @@ def _extract_stsd_content(data: bytes) -> Optional[bytes]:
     idx = data.find(b"stsd")
     if idx < 4:
         return None
-    
+
     # Get stsd box size
     size = struct.unpack(">I", data[idx-4:idx])[0]
     if size < 16 or size > 10000:  # Reasonable stsd size range
         return None
-    
+
     # Return stsd content (after box header = size + type)
-    return data[idx+4:idx-4+size]
+    raw_content = data[idx+4:idx-4+size]
+
+    # Clean the stsd content to remove encryption metadata
+    return _clean_stsd_content(raw_content)
+
+
+def _clean_stsd_content(stsd_content: bytes) -> bytes:
+    """
+    Clean stsd content by removing encryption metadata.
+
+    This replaces the mp4decrypt cleanup step. For encrypted files, the stsd
+    contains encrypted sample entries (enca, encv) with sinf boxes that describe
+    the encryption scheme. We need to:
+    1. Convert encrypted entries (enca -> original format from frma)
+    2. Remove sinf boxes entirely
+    """
+    if len(stsd_content) < 8:
+        return stsd_content
+
+    # stsd content: version(1) + flags(3) + entry_count(4) + entries...
+    version_flags = stsd_content[:4]
+    entry_count = struct.unpack(">I", stsd_content[4:8])[0]
+
+    # Parse and clean each sample entry
+    cleaned_entries = []
+    offset = 8
+
+    for _ in range(entry_count):
+        if offset + 8 > len(stsd_content):
+            break
+
+        entry_size = struct.unpack(">I", stsd_content[offset:offset+4])[0]
+        entry_type = stsd_content[offset+4:offset+8]
+
+        if entry_size < 8 or offset + entry_size > len(stsd_content):
+            break
+
+        entry_data = stsd_content[offset:offset+entry_size]
+
+        # Check if this is an encrypted entry
+        if entry_type in (b"enca", b"encv", b"encs", b"encm"):
+            # Clean the encrypted entry
+            cleaned_entry = _clean_encrypted_sample_entry(entry_data)
+            cleaned_entries.append(cleaned_entry)
+        else:
+            # Keep as-is but still remove any sinf boxes that might be present
+            cleaned_entry = _remove_sinf_from_entry(entry_data)
+            cleaned_entries.append(cleaned_entry)
+
+        offset += entry_size
+
+    # Rebuild stsd content
+    result = version_flags + struct.pack(">I", len(cleaned_entries))
+    for entry in cleaned_entries:
+        result += entry
+
+    return result
+
+
+def _clean_encrypted_sample_entry(entry_data: bytes) -> bytes:
+    """
+    Clean an encrypted sample entry (enca, encv, etc.).
+
+    Structure of encrypted audio entry (enca):
+    - Box header (8 bytes): size + 'enca'
+    - Reserved (6 bytes)
+    - Data reference index (2 bytes)
+    - Audio specific data (varies by codec)
+    - Child boxes including:
+      - sinf (protection scheme info) - REMOVE THIS
+      - Original codec box (alac, esds, etc.) - KEEP
+
+    We need to:
+    1. Find frma box inside sinf to get original format
+    2. Replace 'enca' with original format
+    3. Remove sinf box
+    """
+    if len(entry_data) < 36:  # Minimum audio sample entry size
+        return entry_data
+
+    entry_size = struct.unpack(">I", entry_data[:4])[0]
+    entry_type = entry_data[4:8]
+
+    # Find the original format from sinf/frma
+    original_format = _find_original_format(entry_data)
+    if not original_format:
+        # If we can't find frma, try common mappings
+        if entry_type == b"enca":
+            original_format = b"mp4a"  # Default to AAC
+        elif entry_type == b"encv":
+            original_format = b"avc1"  # Default to H.264
+        else:
+            original_format = entry_type  # Keep as-is
+
+    # Audio sample entry structure:
+    # - size (4) + type (4) + reserved (6) + data_ref_index (2) + audio_data (20) = 36 bytes
+    # - Then child boxes start at offset 36
+
+    # Copy the fixed header part, replacing the type
+    new_entry = entry_data[:4] + original_format + entry_data[8:36]
+
+    # Process child boxes, removing sinf
+    child_offset = 36
+    while child_offset + 8 <= len(entry_data):
+        child_size = struct.unpack(">I", entry_data[child_offset:child_offset+4])[0]
+        child_type = entry_data[child_offset+4:child_offset+8]
+
+        if child_size < 8 or child_offset + child_size > len(entry_data):
+            break
+
+        # Skip sinf box (encryption metadata)
+        if child_type != b"sinf":
+            new_entry += entry_data[child_offset:child_offset+child_size]
+
+        child_offset += child_size
+
+    # Update the entry size
+    new_size = len(new_entry)
+    new_entry = struct.pack(">I", new_size) + new_entry[4:]
+
+    return new_entry
+
+
+def _find_original_format(entry_data: bytes) -> Optional[bytes]:
+    """
+    Find the original format (frma) from sinf box in an encrypted entry.
+
+    sinf box contains:
+    - frma: original format (4 bytes codec type)
+    - schm: scheme type
+    - schi: scheme info (contains tenc for CENC)
+    """
+    # Look for sinf box
+    sinf_idx = entry_data.find(b"sinf")
+    if sinf_idx < 4:
+        return None
+
+    sinf_size = struct.unpack(">I", entry_data[sinf_idx-4:sinf_idx])[0]
+    if sinf_size < 16 or sinf_idx + sinf_size > len(entry_data) + 4:
+        return None
+
+    sinf_data = entry_data[sinf_idx-4:sinf_idx-4+sinf_size]
+
+    # Look for frma box inside sinf
+    frma_idx = sinf_data.find(b"frma")
+    if frma_idx < 4:
+        return None
+
+    frma_size = struct.unpack(">I", sinf_data[frma_idx-4:frma_idx])[0]
+    if frma_size != 12:  # frma is always 12 bytes: size(4) + type(4) + format(4)
+        return None
+
+    # Extract the original format
+    return sinf_data[frma_idx+4:frma_idx+8]
+
+
+def _remove_sinf_from_entry(entry_data: bytes) -> bytes:
+    """
+    Remove sinf box from a sample entry (if present).
+    Used for non-encrypted entries that might still have protection info.
+    """
+    if len(entry_data) < 36:
+        return entry_data
+
+    # Check if sinf exists
+    if b"sinf" not in entry_data:
+        return entry_data
+
+    # Rebuild entry without sinf
+    new_entry = entry_data[:36]  # Keep header and audio data
+
+    child_offset = 36
+    while child_offset + 8 <= len(entry_data):
+        child_size = struct.unpack(">I", entry_data[child_offset:child_offset+4])[0]
+        child_type = entry_data[child_offset+4:child_offset+8]
+
+        if child_size < 8 or child_offset + child_size > len(entry_data):
+            break
+
+        if child_type != b"sinf":
+            new_entry += entry_data[child_offset:child_offset+child_size]
+
+        child_offset += child_size
+
+    # Update size
+    new_size = len(new_entry)
+    new_entry = struct.pack(">I", new_size) + new_entry[4:]
+
+    return new_entry
 
 
 def _extract_alac_config(data: bytes) -> Optional[bytes]:
@@ -765,7 +929,6 @@ def _extract_timescale(data: bytes) -> int:
 
 async def decrypt_file(
     wrapper_ip: str,
-    mp4decrypt_path: str,
     track_id: str,
     fairplay_key: str,
     input_path: str,
@@ -774,16 +937,14 @@ async def decrypt_file(
 ) -> None:
     """
     Main decryption function - decrypt an encrypted MP4 file via the wrapper.
-    
+
     This is the Python equivalent of the amdecrypt tool:
     1. Extract samples from encrypted MP4
     2. Send samples to wrapper for FairPlay decryption
-    3. Reassemble decrypted MP4
-    4. Fix metadata with mp4decrypt
-    
+    3. Reassemble decrypted MP4 with clean metadata
+
     Args:
         wrapper_ip: Wrapper decrypt port address (e.g., "127.0.0.1:10020")
-        mp4decrypt_path: Path to mp4decrypt binary
         track_id: Apple Music track ID
         fairplay_key: FairPlay key URI (skd://...)
         input_path: Path to encrypted MP4 file
@@ -791,10 +952,10 @@ async def decrypt_file(
         progress_callback: Optional callback(current, total, bytes, speed) for decryption progress
     """
     logger.info(f"Decrypting {input_path} -> {output_path}")
-    
+
     # Extract samples (run in thread to not block)
     song_info = await asyncio.to_thread(extract_song, input_path)
-    
+
     # Decrypt samples via wrapper
     decrypted_data = await asyncio.to_thread(
         decrypt_samples,
@@ -804,33 +965,32 @@ async def decrypt_file(
         song_info.samples,
         progress_callback,
     )
-    
+
     # Write output file (preserve original structure, replace mdat content)
+    # Encryption metadata is automatically cleaned during stsd extraction
     await asyncio.to_thread(
         write_decrypted_m4a,
         output_path,
         song_info,
         decrypted_data,
-        mp4decrypt_path,
-        input_path,  # Pass original path for in-place replacement
+        input_path,  # Pass original path for codec info extraction
     )
 
 
 # CLI interface for testing
 if __name__ == "__main__":
     import sys
-    
-    if len(sys.argv) != 7:
-        print(f"Usage: {sys.argv[0]} <wrapper_ip> <mp4decrypt_path> <track_id> <fairplay_key> <input_path> <output_path>")
+
+    if len(sys.argv) != 6:
+        print(f"Usage: {sys.argv[0]} <wrapper_ip> <track_id> <fairplay_key> <input_path> <output_path>")
         sys.exit(1)
-    
+
     logging.basicConfig(level=logging.INFO)
-    
+
     asyncio.run(decrypt_file(
         wrapper_ip=sys.argv[1],
-        mp4decrypt_path=sys.argv[2],
-        track_id=sys.argv[3],
-        fairplay_key=sys.argv[4],
-        input_path=sys.argv[5],
-        output_path=sys.argv[6],
+        track_id=sys.argv[2],
+        fairplay_key=sys.argv[3],
+        input_path=sys.argv[4],
+        output_path=sys.argv[5],
     ))

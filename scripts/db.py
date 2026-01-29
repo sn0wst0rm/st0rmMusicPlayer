@@ -34,7 +34,6 @@ class AppleMusicBaseDownloader:
         save_cover: bool = False,
         save_playlist: bool = False,
         nm3u8dlre_path: str = "N_m3u8DL-RE",
-        mp4decrypt_path: str = "mp4decrypt",
         ffmpeg_path: str = "ffmpeg",
         mp4box_path: str = "MP4Box",
         amdecrypt_path: str = "amdecrypt",
@@ -63,7 +62,6 @@ class AppleMusicBaseDownloader:
         self.save_cover = save_cover
         self.save_playlist = save_playlist
         self.nm3u8dlre_path = nm3u8dlre_path
-        self.mp4decrypt_path = mp4decrypt_path
         self.ffmpeg_path = ffmpeg_path
         self.mp4box_path = mp4box_path
         self.amdecrypt_path = amdecrypt_path
@@ -92,7 +90,6 @@ class AppleMusicBaseDownloader:
 
     def _initialize_binary_paths(self):
         self.full_nm3u8dlre_path = shutil.which(self.nm3u8dlre_path)
-        self.full_mp4decrypt_path = shutil.which(self.mp4decrypt_path)
         self.full_ffmpeg_path = shutil.which(self.ffmpeg_path)
         self.full_mp4box_path = shutil.which(self.mp4box_path)
         self.full_amdecrypt_path = shutil.which(self.amdecrypt_path)

@@ -238,7 +238,6 @@ class WrapperSongDownloader:
         
         await amdecrypt.decrypt_file(
             wrapper_ip=self.wrapper_ip,
-            mp4decrypt_path="mp4decrypt",
             track_id=track_id,
             fairplay_key=fairplay_key,
             input_path=str(encrypted_path),
@@ -536,7 +535,6 @@ async def download_track_with_wrapper(
     
     await amdecrypt.decrypt_file(
         wrapper_ip=wrapper_ip,
-        mp4decrypt_path="mp4decrypt",
         track_id=track_id,
         fairplay_key=fairplay_key,
         input_path=encrypted_path,
