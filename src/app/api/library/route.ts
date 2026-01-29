@@ -41,6 +41,8 @@ export async function GET() {
                             composer: true,
                             genre: true,
                             lyricsPath: true,
+                            albumId: true,
+                            artistId: true,
                             album: {
                                 select: {
                                     title: true,

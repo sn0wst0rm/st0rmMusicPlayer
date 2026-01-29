@@ -86,7 +86,7 @@ export default function AlbumsPage() {
             const tracksWithMetadata = album.tracks.map(track => ({
                 ...track,
                 artist: { name: artistName || 'Unknown Artist' },
-                album: { title: album.title }
+                album: { title: album.title, animatedCoverPath: album.animatedCoverPath }
             }))
             playTrack(tracksWithMetadata[0], tracksWithMetadata)
         }

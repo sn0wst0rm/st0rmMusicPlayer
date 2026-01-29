@@ -58,7 +58,11 @@ export default function Home() {
 
   // --- Data Preparation ---
   const allSongs = React.useMemo(() => {
-    return library.flatMap(artist => artist.albums.flatMap(album => album.tracks.map(t => ({ ...t, artist: { name: artist.name }, album: { title: album.title } }))))
+    return library.flatMap(artist => artist.albums.flatMap(album => album.tracks.map(t => ({
+      ...t,
+      artist: { name: artist.name },
+      album: { title: album.title, animatedCoverPath: album.animatedCoverPath }
+    }))))
       .sort((a, b) => a.title.localeCompare(b.title))
   }, [library])
 

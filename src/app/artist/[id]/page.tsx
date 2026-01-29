@@ -147,7 +147,7 @@ export default function ArtistPage() {
             album.tracks.map(track => ({
                 ...track,
                 artist: { name: localArtist.name },
-                album: { title: album.title }
+                album: { title: album.title, animatedCoverPath: album.animatedCoverPath }
             }))
         )
         if (allTracks.length > 0) {
@@ -161,7 +161,7 @@ export default function ArtistPage() {
             album.tracks.map(track => ({
                 ...track,
                 artist: { name: localArtist.name },
-                album: { title: album.title }
+                album: { title: album.title, animatedCoverPath: album.animatedCoverPath }
             }))
         )
         if (allTracks.length > 0) {
