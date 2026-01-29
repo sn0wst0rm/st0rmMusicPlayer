@@ -5196,11 +5196,29 @@ async def download_song(request: DownloadRequest):
                     animated_cover_path = None
                     animated_cover_small_path = None
                     animated_cover_url = album_metadata.get("animatedCoverUrl")
-                    if animated_cover_url and i == 0:  # Only download for first track
+
+                    # Check for existing animated cover files first (GIF preferred, then MP4)
+                    potential_animated_gif = Path(file_path).parent / "cover-animated.gif"
+                    potential_animated_mp4 = Path(file_path).parent / "cover-animated.mp4"
+                    potential_animated_small_gif = Path(file_path).parent / "cover-animated-small.gif"
+                    potential_animated_small_mp4 = Path(file_path).parent / "cover-animated-small.mp4"
+
+                    if potential_animated_gif.exists():
+                        animated_cover_path = str(potential_animated_gif)
+                    elif potential_animated_mp4.exists():
+                        animated_cover_path = str(potential_animated_mp4)
+
+                    if potential_animated_small_gif.exists():
+                        animated_cover_small_path = str(potential_animated_small_gif)
+                    elif potential_animated_small_mp4.exists():
+                        animated_cover_small_path = str(potential_animated_small_mp4)
+
+                    # If no existing files and we have a URL, download for first track only
+                    if animated_cover_url and i == 0 and not animated_cover_path:
                         try:
                             output_dir = Path(file_path).parent
                             animated_paths = await download_animated_cover(
-                                animated_cover_url, output_dir, 
+                                animated_cover_url, output_dir,
                                 album_metadata.get("albumAppleMusicId", "unknown")
                             )
                             if animated_paths:
@@ -5208,23 +5226,6 @@ async def download_song(request: DownloadRequest):
                                 animated_cover_small_path = animated_paths.get("small")
                         except Exception as e:
                             print(f"[ANIMATED COVER] Failed to download: {e}", flush=True)
-                    elif animated_cover_url and i > 0:
-                        # For subsequent tracks, check if animated cover already exists
-                        # Check for GIF first (current format), then MP4 (legacy fallback)
-                        potential_animated_gif = Path(file_path).parent / "cover-animated.gif"
-                        potential_animated_mp4 = Path(file_path).parent / "cover-animated.mp4"
-                        potential_animated_small_gif = Path(file_path).parent / "cover-animated-small.gif"
-                        potential_animated_small_mp4 = Path(file_path).parent / "cover-animated-small.mp4"
-                        
-                        if potential_animated_gif.exists():
-                            animated_cover_path = str(potential_animated_gif)
-                        elif potential_animated_mp4.exists():
-                            animated_cover_path = str(potential_animated_mp4)
-                            
-                        if potential_animated_small_gif.exists():
-                            animated_cover_small_path = str(potential_animated_small_gif)
-                        elif potential_animated_small_mp4.exists():
-                            animated_cover_small_path = str(potential_animated_small_mp4)
 
                     yield {
                         "event": "track_complete",
